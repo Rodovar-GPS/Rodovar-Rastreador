@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TrackingData, TrackingStatus, StatusLabels, AdminUser } from '../types';
+import { TrackingData, TrackingStatus, StatusLabels, AdminUser, Expense } from '../types';
 import { 
     saveShipment, getAllShipments, deleteShipment, 
     getCoordinatesForCity, getCoordinatesForString, calculateProgress,
@@ -56,10 +56,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
   
   // Dados Financeiros (Read-only ou preservados no edit)
   const [driverNotes, setDriverNotes] = useState('');
-  const [maintDesc, setMaintDesc] = useState('');
-  const [maintCost, setMaintCost] = useState(0);
-  const [fuelCost, setFuelCost] = useState(0);
-  const [fuelDate, setFuelDate] = useState('');
+  // Novo estado para lista de despesas
+  const [expensesList, setExpensesList] = useState<Expense[]>([]);
   
   // Inicializa com datas dinâmicas
   const [estimatedDate, setEstimatedDate] = useState(getFutureDateFormatted(3));
@@ -132,10 +130,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
       
       // Reset finance fields
       setDriverNotes('');
-      setMaintDesc('');
-      setMaintCost(0);
-      setFuelCost(0);
-      setFuelDate('');
+      setExpensesList([]);
   };
 
   // --- HANDLER: GPS LOCATION ---
@@ -228,10 +223,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
             
             // Preserve driver data if editing, or initialize
             driverNotes,
-            maintenanceDescription: maintDesc,
-            maintenanceCost: maintCost,
-            fuelCost: fuelCost,
-            fuelDate: fuelDate
+            expenses: expensesList, // Salva a lista de despesas atual (preserva o que o motorista lançou)
+            
+            // Zera campos legados para garantir uso da nova lista
+            maintenanceCost: 0,
+            fuelCost: 0
         };
 
         saveShipment(newData);
@@ -267,10 +263,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
     
     // Load financial/driver data
     setDriverNotes(data.driverNotes || '');
-    setMaintDesc(data.maintenanceDescription || '');
-    setMaintCost(data.maintenanceCost || 0);
-    setFuelCost(data.fuelCost || 0);
-    setFuelDate(data.fuelDate || '');
+    setExpensesList(data.expenses || []);
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -312,6 +305,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
   };
 
   const isAdmin = currentUser === 'admin';
+
+  // Calculate total expenses for display
+  const totalExpenses = expensesList.reduce((acc, curr) => acc + curr.value, 0);
 
   return (
     <div className="w-full max-w-7xl mx-auto px-4 py-4 md:py-8 animate-[fadeIn_0.5s]">
@@ -500,27 +496,47 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
                         </div>
                     </div>
 
-                    {/* Seção 5: Visualização do Motorista (Financeiro) */}
+                    {/* Seção 5: Visualização do Motorista (Financeiro) - ATUALIZADO */}
                     {isEditing && (
                         <div className="space-y-4 bg-black/20 p-4 rounded border border-gray-800">
                             <h4 className="text-blue-400 text-xs uppercase font-bold tracking-widest border-b border-blue-900/30 pb-1">
-                                5. Dados Motorista
+                                5. Dados Motorista (Lançamentos)
                             </h4>
-                            <div className="grid grid-cols-2 gap-4 text-xs">
-                                <div>
-                                    <p className="text-gray-500 uppercase">Manutenção</p>
-                                    <p className="text-white font-bold">{maintDesc || 'Nenhuma'}</p>
-                                    <p className="text-rodovar-yellow">R$ {maintCost ? maintCost.toFixed(2) : '0.00'}</p>
+                            
+                            {expensesList.length > 0 ? (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-[10px] md:text-xs text-left">
+                                        <thead>
+                                            <tr className="text-gray-500 border-b border-gray-800">
+                                                <th className="pb-2">Tipo</th>
+                                                <th className="pb-2">Descrição</th>
+                                                <th className="pb-2 text-right">Valor</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-800">
+                                            {expensesList.map((item, idx) => (
+                                                <tr key={item.id || idx}>
+                                                    <td className="py-2 text-gray-300">{item.category}</td>
+                                                    <td className="py-2 text-gray-400">{item.description}</td>
+                                                    <td className="py-2 text-right text-rodovar-yellow">
+                                                        R$ {item.value.toFixed(2)}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            <tr className="border-t border-gray-700 font-bold">
+                                                <td colSpan={2} className="py-2 text-white text-right pr-2">TOTAL GERAL:</td>
+                                                <td className="py-2 text-right text-green-400">R$ {totalExpenses.toFixed(2)}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
                                 </div>
-                                <div>
-                                    <p className="text-gray-500 uppercase">Abastecimento</p>
-                                    <p className="text-white font-bold">{fuelDate ? new Date(fuelDate).toLocaleDateString() : '-'}</p>
-                                    <p className="text-rodovar-yellow">R$ {fuelCost ? fuelCost.toFixed(2) : '0.00'}</p>
-                                </div>
-                            </div>
-                            <div>
-                                <p className="text-gray-500 uppercase text-xs">Notas do Motorista</p>
-                                <p className="text-gray-300 text-sm italic border border-gray-700 p-2 rounded bg-black/40 mt-1 break-words">
+                            ) : (
+                                <p className="text-xs text-gray-500 italic">Nenhuma despesa lançada pelo motorista.</p>
+                            )}
+
+                            <div className="pt-2 border-t border-gray-800">
+                                <p className="text-gray-500 uppercase text-xs mb-1">Notas do Motorista</p>
+                                <p className="text-gray-300 text-sm italic border border-gray-700 p-2 rounded bg-black/40 break-words">
                                     {driverNotes || 'Sem observações.'}
                                 </p>
                             </div>
@@ -609,10 +625,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
                                     </div>
                                 </div>
                                 
-                                {/* Indicador de que o motorista adicionou dados */}
-                                {(shipment.maintenanceCost || 0) + (shipment.fuelCost || 0) > 0 && (
+                                {/* Indicador de que o motorista adicionou despesas */}
+                                {shipment.expenses && shipment.expenses.length > 0 && (
                                     <div className="mb-2 flex items-center gap-2 text-xs text-rodovar-yellow bg-yellow-900/20 p-1 rounded border border-yellow-900/50">
-                                        <span>💰 Gastos Declarados: R$ {((shipment.maintenanceCost || 0) + (shipment.fuelCost || 0)).toFixed(2)}</span>
+                                        <span>💰 Gastos Declarados: R$ {shipment.expenses.reduce((a, b) => a + b.value, 0).toFixed(2)}</span>
                                     </div>
                                 )}
 
