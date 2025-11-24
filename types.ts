@@ -38,6 +38,13 @@ export interface Expense {
   date: string;
 }
 
+export interface Driver {
+  id: string;
+  name: string; // Nome e Sobrenome
+  password: string; // Senha de acesso
+  phone?: string;
+}
+
 export interface TrackingData {
   code: string;
   status: TrackingStatus;
@@ -52,10 +59,15 @@ export interface TrackingData {
   destinationAddress?: string; // Endereço detalhado do destino
   destinationCoordinates?: Coordinates; // Coordenadas do destino para o mapa
   lastUpdate: string;
+  lastUpdatedBy?: string; // Novo campo: Quem atualizou (Admin ou Motorista Específico)
   estimatedDelivery: string;
   message: string;
   notes?: string; // Notas do ADMIN
   progress: number; // 0 to 100
+
+  // Vinculo com Motorista
+  driverId?: string; // ID do motorista responsável
+  driverName?: string; // Nome do motorista (cache para exibição)
 
   // Novos campos do Motorista
   driverNotes?: string;

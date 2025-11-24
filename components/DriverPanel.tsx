@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { TrackingData, TrackingStatus, Coordinates, StatusLabels, Expense } from '../types';
-import { getShipment, saveShipment, getCoordinatesForString, calculateProgress } from '../services/storageService';
+import { TrackingData, TrackingStatus, Coordinates, StatusLabels, Expense, Driver } from '../types';
+import { getShipment, saveShipment, getCoordinatesForString, calculateProgress, validateDriverLogin, getDistanceFromLatLonInKm } from '../services/storageService';
 import MapVisualization from './MapVisualization';
-import { TruckIcon } from './Icons';
+import { TruckIcon, SteeringWheelIcon } from './Icons';
 
 interface DriverPanelProps {
   onClose: () => void;
@@ -10,8 +10,9 @@ interface DriverPanelProps {
 
 const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
   // --- AUTH STATES ---
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [authUser, setAuthUser] = useState('');
+  const [currentDriver, setCurrentDriver] = useState<Driver | null>(null);
+  
+  const [authName, setAuthName] = useState('');
   const [authPass, setAuthPass] = useState('');
   const [authError, setAuthError] = useState('');
 
@@ -23,17 +24,17 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
   const [lastUpdateLog, setLastUpdateLog] = useState<string>('');
   const [showInvoice, setShowInvoice] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  
+  // Distância restante (numérico para lógica)
+  const [remainingDistanceKm, setRemainingDistanceKm] = useState<number | null>(null);
 
   // --- FORM STATES (DRIVER INPUTS) ---
   const [driverNotes, setDriverNotes] = useState('');
-  
-  // Novos Estados de Despesa (Lista)
   const [expenseCategory, setExpenseCategory] = useState<'Combustível' | 'Manutenção' | 'Alimentação' | 'Outros'>('Combustível');
   const [expenseDesc, setExpenseDesc] = useState('');
   const [expenseValue, setExpenseValue] = useState('');
   const [pendingExpenses, setPendingExpenses] = useState<Expense[]>([]);
 
-  // Helper: Get formatted time string
   const getNowFormatted = () => {
     const now = new Date();
     const day = String(now.getDate()).padStart(2, '0');
@@ -43,14 +44,32 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
     return `${hours}:${minutes} - ${day}/${month}`;
   };
 
-  const handleGatekeeperLogin = (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (authUser.toLowerCase() === 'rodovar' && authPass === 'motorista2026') {
-        setIsAuthenticated(true);
+    const driver = validateDriverLogin(authName, authPass);
+    if (driver) {
+        setCurrentDriver(driver);
         setAuthError('');
     } else {
-        setAuthError('Credenciais de motorista inválidas.');
+        setAuthError('Motorista não encontrado ou senha incorreta.');
     }
+  };
+
+  const handleLogout = () => {
+      setCurrentDriver(null);
+      setShipment(null);
+      setRemainingDistanceKm(null);
+  };
+
+  // Função auxiliar para atualizar a distância na UI
+  const updateDistanceCalc = (current: Coordinates, dest?: Coordinates) => {
+      if (current && dest && (dest.lat !== 0 || dest.lng !== 0)) {
+          const dist = getDistanceFromLatLonInKm(current.lat, current.lng, dest.lat, dest.lng);
+          // Mantém precisão decimal para distâncias curtas
+          setRemainingDistanceKm(dist);
+      } else {
+          setRemainingDistanceKm(null);
+      }
   };
 
   const handleShipmentLogin = (e: React.FormEvent) => {
@@ -58,10 +77,12 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
     const found = getShipment(code.toUpperCase());
     if (found) {
         setShipment(found);
-        // Load existing data
         setDriverNotes(found.driverNotes || '');
         setError('');
-        setPendingExpenses([]); // Reset pending on load
+        setPendingExpenses([]); 
+        
+        // Calcular distância inicial se já houver dados
+        updateDistanceCalc(found.currentLocation.coordinates, found.destinationCoordinates);
     } else {
         setError('Carga não encontrada. Verifique o código.');
     }
@@ -94,11 +115,11 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
       setPendingExpenses(pendingExpenses.filter(e => e.id !== id));
   };
 
-  // Função centralizada de atualização
   const performUpdate = async (forceCompletion = false) => {
       if (!navigator.geolocation) {
           throw new Error("Navegador sem suporte a GPS.");
       }
+      if (!currentDriver) throw new Error("Sessão expirada.");
 
       return new Promise<void>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(
@@ -108,13 +129,11 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                       const { latitude, longitude } = position.coords;
                       const currentCoords: Coordinates = { lat: latitude, lng: longitude };
 
-                      // 1. Recuperar dados frescos do storage
                       const freshShipment = getShipment(code.toUpperCase());
                       if (!freshShipment) {
-                          throw new Error("Sessão inválida. Carga não encontrada.");
+                          throw new Error("Carga não encontrada.");
                       }
 
-                      // 2. Geocoding Reverso (Coords -> Endereço)
                       let city = freshShipment.currentLocation.city;
                       let state = freshShipment.currentLocation.state;
                       let address = freshShipment.currentLocation.address || '';
@@ -138,11 +157,14 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                           console.warn("Erro no Geocoding reverso:", geoErr);
                       }
 
-                      // 3. Coordenadas de Destino & Progresso
                       let destCoords = freshShipment.destinationCoordinates;
+                      // Tenta pegar coords melhores se não tiver, usando endereço completo
                       if ((!destCoords || (destCoords.lat === 0 && destCoords.lng === 0)) && freshShipment.destination) {
-                           destCoords = await getCoordinatesForString(freshShipment.destination);
+                           destCoords = await getCoordinatesForString(freshShipment.destination, freshShipment.destinationAddress);
                       }
+
+                      // ATUALIZAÇÃO DA DISTÂNCIA NA UI
+                      updateDistanceCalc(currentCoords, destCoords);
 
                       let progress = freshShipment.progress || 0;
                       if (destCoords && freshShipment.origin) {
@@ -150,33 +172,10 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                            progress = calculateProgress(originCoords, destCoords, currentCoords);
                       }
                       
-                      // Lógica de Progresso e Conclusão
-                      if (progress < 1) progress = 1;
                       if (forceCompletion) progress = 100;
 
-                      // 4. Consolidar Despesas (Histórico Antigo + Novos Pendentes)
-                      const currentExpenses = freshShipment.expenses || [];
-                      // Se houver campos legados e nenhum expense array, converte-os (migração)
-                      if (currentExpenses.length === 0 && (freshShipment.maintenanceCost || freshShipment.fuelCost)) {
-                          if (freshShipment.maintenanceCost) {
-                              currentExpenses.push({
-                                  id: 'legacy-maint', category: 'Manutenção', 
-                                  description: freshShipment.maintenanceDescription || 'Manutenção Anterior',
-                                  value: freshShipment.maintenanceCost, date: freshShipment.maintenanceDate || new Date().toISOString()
-                              });
-                          }
-                          if (freshShipment.fuelCost) {
-                              currentExpenses.push({
-                                  id: 'legacy-fuel', category: 'Combustível',
-                                  description: 'Combustível Anterior',
-                                  value: freshShipment.fuelCost, date: freshShipment.fuelDate || new Date().toISOString()
-                              });
-                          }
-                      }
+                      const updatedExpenses = [...(freshShipment.expenses || []), ...pendingExpenses];
 
-                      const updatedExpenses = [...currentExpenses, ...pendingExpenses];
-
-                      // 5. Montar Objeto Atualizado
                       const updatedShipment: TrackingData = {
                           ...freshShipment,
                           status: forceCompletion ? TrackingStatus.DELIVERED : TrackingStatus.IN_TRANSIT,
@@ -188,67 +187,65 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                           },
                           destinationCoordinates: destCoords,
                           lastUpdate: getNowFormatted(),
+                          lastUpdatedBy: currentDriver.name, // NOME DO MOTORISTA
                           progress: progress,
-                          message: forceCompletion ? 'Entrega Realizada' : 'Em trânsito - Atualizado pelo Motorista',
+                          message: forceCompletion ? 'Entrega Realizada' : `Atualizado por ${currentDriver.name}`,
                           
                           driverNotes: driverNotes,
-                          expenses: updatedExpenses, // Salva o array completo
+                          expenses: updatedExpenses, 
                           
-                          // Limpa campos legados para evitar confusão futura
                           maintenanceCost: 0, fuelCost: 0
                       };
 
-                      // 6. Salvar
                       saveShipment(updatedShipment);
                       setShipment(updatedShipment);
-                      setPendingExpenses([]); // Limpa pendentes pois já foram salvos
-                      setLastUpdateLog(forceCompletion ? `VIAGEM CONCLUÍDA às ${getNowFormatted()}` : `Atualizado: ${city} às ${getNowFormatted()}`);
+                      setPendingExpenses([]); 
+                      setLastUpdateLog(forceCompletion ? `CONCLUÍDA por ${currentDriver.name}` : `Atualizado em ${city}`);
                       resolve();
 
                   } catch (err: any) {
                       console.error("Erro no processamento:", err);
-                      setLastUpdateLog(`Erro processamento: ${err.message}`);
+                      setLastUpdateLog(`Erro: ${err.message}`);
                       reject(err);
                   }
               },
               (geoError) => {
-                  console.error("Erro de Geolocalização:", geoError);
-                  let msg = "Erro desconhecido de GPS.";
-                  switch(geoError.code) {
-                      case 1: msg = "Permissão de GPS Negada."; break;
-                      case 2: msg = "Sinal de GPS indisponível."; break;
-                      case 3: msg = "Tempo limite do GPS esgotado."; break;
-                  }
-                  setLastUpdateLog(msg);
-                  reject(new Error(msg));
+                  reject(new Error("Erro de GPS. Verifique a permissão."));
               },
               { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
           );
       });
   };
 
+  // Lógica de Ativação do Botão Concluir
+  // Ativa se a distância for MENOR OU IGUAL A 1 KM (com margem de erro pequena para GPS drift)
+  const isCloseEnoughToFinish = remainingDistanceKm !== null && remainingDistanceKm <= 1.0;
+  const isTripCompleted = shipment?.status === TrackingStatus.DELIVERED;
+
   const handleUpdateTrip = async () => {
-      if (!window.isSecureContext && window.location.hostname !== 'localhost') {
-          alert("Atenção: O rastreamento GPS requer conexão segura (HTTPS).");
+      // Se estiver próximo o suficiente (1km), pergunta se quer concluir.
+      if (isCloseEnoughToFinish && !isTripCompleted) {
+          if (confirm("Você está no destino (menos de 1km). Deseja CONCLUIR A VIAGEM e marcar como ENTREGUE?")) {
+              setIsLocating(true);
+              try {
+                  await performUpdate(true); // Force Completion
+                  alert("Viagem Concluída com Sucesso!");
+              } catch (err: any) {
+                  alert(`Erro: ${err.message}`);
+              } finally {
+                  setIsLocating(false);
+              }
+              return;
+          }
       }
-      
-      const isReadyToComplete = shipment && shipment.progress >= 90;
-      const actionText = isReadyToComplete ? "CONCLUIR VIAGEM" : "ATUALIZAR VIAGEM";
 
-      if (isReadyToComplete && !confirm("Confirma a CONCLUSÃO DA VIAGEM? O status mudará para ENTREGUE.")) {
-          return;
-      }
-
+      // Atualização Padrão
       setIsLocating(true);
       try {
-          await performUpdate(isReadyToComplete);
-          if (isReadyToComplete) {
-              alert("PARABÉNS! Viagem marcada como CONCLUÍDA e ENTREGUE.");
-          } else {
-              alert("Viagem atualizada com sucesso! Dados salvos.");
-          }
+          await performUpdate(false);
+          alert("Dados Atualizados!");
       } catch (err: any) {
-          alert(`ERRO AO ${actionText}:\n${err.message}`);
+          alert(`Erro: ${err.message}`);
       } finally {
           setIsLocating(false);
       }
@@ -256,76 +253,49 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
 
   const handleDownloadPDF = () => {
     const element = document.getElementById('printable-invoice');
-    if (!element || !shipment) return;
-
+    if (!element) return;
     setIsGeneratingPdf(true);
-
-    // Configurações do html2pdf
     const opt = {
-        margin:       5, // margem em mm
-        filename:     `Comprovante_${shipment.code}.pdf`,
-        image:        { type: 'jpeg', quality: 0.98 },
-        html2canvas:  { scale: 2, useCORS: true, logging: false },
-        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        margin: 5, filename: `Comprovante_${shipment?.code}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
-
-    // Chamada da biblioteca (adicionada via script tag no index.html)
-    const html2pdf = (window as any).html2pdf;
-    
-    if (html2pdf) {
-        html2pdf().set(opt).from(element).save().then(() => {
-            setIsGeneratingPdf(false);
-        }).catch((err: any) => {
-            console.error("Erro ao gerar PDF:", err);
-            alert("Erro ao gerar o arquivo PDF. Tente novamente.");
-            setIsGeneratingPdf(false);
-        });
-    } else {
-        alert("Biblioteca de PDF não carregada. Verifique sua conexão.");
-        setIsGeneratingPdf(false);
-    }
+    (window as any).html2pdf().set(opt).from(element).save().then(() => setIsGeneratingPdf(false));
   };
 
-  // --- RENDER: GATEKEEPER (LOGIN) ---
-  if (!isAuthenticated) {
+  // --- LOGIN SCREEN ---
+  if (!currentDriver) {
       return (
         <div className="flex flex-col items-center justify-center min-h-[60vh] px-4 animate-[fadeIn_0.3s]">
             <div className="w-full max-w-md bg-[#1E1E1E] border border-gray-700 rounded-xl p-6 md:p-8 shadow-2xl text-center">
                 <div className="inline-block p-4 rounded-full bg-rodovar-yellow mb-4">
-                    <TruckIcon className="w-8 h-8 text-black" />
+                    <SteeringWheelIcon className="w-8 h-8 text-black" />
                 </div>
-                <h2 className="text-2xl font-bold text-white">Acesso Motorista</h2>
-                <p className="text-gray-400 text-sm mb-6">Faça login para acessar o painel de controle.</p>
+                <h2 className="text-2xl font-bold text-white">Login do Motorista</h2>
+                <p className="text-gray-400 text-sm mb-6">Entre com seu Nome e Sobrenome cadastrados.</p>
                 
-                <form onSubmit={handleGatekeeperLogin} className="space-y-4">
-                    <div>
-                        <input 
-                            type="text" 
-                            value={authUser}
-                            onChange={e => setAuthUser(e.target.value)}
-                            placeholder="Login (Ex: Rodovar)"
-                            className="w-full bg-black/50 border border-gray-600 rounded p-3 text-white focus:border-rodovar-yellow outline-none"
-                        />
-                    </div>
-                    <div>
-                        <input 
-                            type="password" 
-                            value={authPass}
-                            onChange={e => setAuthPass(e.target.value)}
-                            placeholder="Senha"
-                            className="w-full bg-black/50 border border-gray-600 rounded p-3 text-white focus:border-rodovar-yellow outline-none"
-                        />
-                    </div>
+                <form onSubmit={handleLogin} className="space-y-4">
+                    <input 
+                        type="text" 
+                        value={authName}
+                        onChange={e => setAuthName(e.target.value)}
+                        placeholder="Nome e Sobrenome"
+                        className="w-full bg-black/50 border border-gray-600 rounded p-3 text-white focus:border-rodovar-yellow outline-none"
+                    />
+                    <input 
+                        type="password" 
+                        value={authPass}
+                        onChange={e => setAuthPass(e.target.value)}
+                        placeholder="Senha"
+                        className="w-full bg-black/50 border border-gray-600 rounded p-3 text-white focus:border-rodovar-yellow outline-none"
+                    />
                     
                     {authError && <p className="text-red-500 text-sm font-bold">{authError}</p>}
 
                     <div className="flex gap-2">
-                        <button type="button" onClick={onClose} className="flex-1 bg-gray-800 text-white font-bold py-3 rounded hover:bg-gray-700">
-                            CANCELAR
-                        </button>
-                        <button type="submit" className="flex-[2] bg-rodovar-yellow text-black font-bold py-3 rounded hover:bg-yellow-400">
-                            ENTRAR
-                        </button>
+                        <button type="button" onClick={onClose} className="flex-1 bg-gray-800 text-white font-bold py-3 rounded hover:bg-gray-700">VOLTAR</button>
+                        <button type="submit" className="flex-[2] bg-rodovar-yellow text-black font-bold py-3 rounded hover:bg-yellow-400">ENTRAR</button>
                     </div>
                 </form>
             </div>
@@ -333,16 +303,24 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
       );
   }
 
-  // --- RENDER: SHIPMENT SELECTOR ---
+  // --- SEJA BEM VINDO (NOVO) / SHIPMENT SELECTOR ---
   if (!shipment) {
     return (
-        <div className="w-full max-w-md mx-auto p-4 md:p-6 animate-[fadeIn_0.3s]">
-            <div className="bg-[#1E1E1E] border border-rodovar-yellow/30 rounded-xl p-6 md:p-8 shadow-2xl text-center relative">
-                <button onClick={() => setIsAuthenticated(false)} className="absolute top-4 right-4 text-gray-500 hover:text-white text-xs uppercase">
-                    Sair
-                </button>
-                <h2 className="text-2xl font-bold text-white mb-2">Selecionar Carga</h2>
-                <p className="text-gray-400 text-sm mb-6">Informe o código da carga para iniciar.</p>
+        <div className="w-full max-w-md mx-auto p-4 md:p-6 animate-[fadeIn_0.3s] flex flex-col items-center">
+            
+            {/* WELCOME BANNER */}
+            <div className="w-full bg-rodovar-yellow rounded-xl p-6 text-center shadow-lg mb-6 relative overflow-hidden group">
+                 <div className="absolute top-0 left-0 w-full h-1 bg-white/50"></div>
+                 <SteeringWheelIcon className="w-12 h-12 text-black mx-auto mb-2 animate-pulse" />
+                 <h2 className="text-xl text-black font-extrabold uppercase tracking-tight">SEJA BEM VINDO</h2>
+                 <h1 className="text-2xl md:text-3xl text-black font-black mt-1">{currentDriver.name}</h1>
+                 <p className="text-black/70 text-xs mt-2 font-bold uppercase tracking-widest">Motorista Rodovar</p>
+            </div>
+
+            <div className="w-full bg-[#1E1E1E] border border-gray-700 rounded-xl p-6 md:p-8 shadow-2xl text-center relative">
+                <button onClick={handleLogout} className="absolute top-4 right-4 text-gray-500 hover:text-white text-xs uppercase">SAIR</button>
+                <h2 className="text-xl font-bold text-white mb-2">Iniciar Viagem</h2>
+                <p className="text-gray-400 text-sm mb-6">Digite o código da carga para começar.</p>
 
                 <form onSubmit={handleShipmentLogin} className="space-y-4">
                     <input 
@@ -353,11 +331,7 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                         className="w-full bg-black/50 border border-gray-600 rounded-lg p-4 text-center text-xl text-white font-mono font-bold focus:border-rodovar-yellow outline-none uppercase tracking-widest"
                     />
                     {error && <p className="text-red-500 text-xs font-bold">{error}</p>}
-                    
-                    <button 
-                        type="submit"
-                        className="w-full bg-rodovar-yellow text-black font-bold py-3 rounded-lg hover:bg-yellow-400 shadow-[0_0_15px_rgba(255,215,0,0.2)]"
-                    >
+                    <button type="submit" className="w-full bg-rodovar-yellow text-black font-bold py-3 rounded-lg hover:bg-yellow-400 shadow-[0_0_15px_rgba(255,215,0,0.2)]">
                         ACESSAR PAINEL
                     </button>
                 </form>
@@ -366,171 +340,79 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
     );
   }
 
-  const isTripCompleted = shipment.status === TrackingStatus.DELIVERED;
-  const isReadyToFinish = shipment.progress >= 90;
-
-  // --- RENDER: MAIN COCKPIT ---
+  // --- MAIN COCKPIT ---
   return (
     <div className="w-full max-w-7xl mx-auto px-4 py-4 md:py-6 flex flex-col pb-24 md:pb-20 animate-[fadeIn_0.5s]">
         
-        {/* Header Motorista (Mobile Responsivo) */}
+        {/* Header Logado */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 bg-[#1E1E1E] p-4 rounded-xl border border-gray-800 gap-4">
-            <div>
-                <h2 className="text-white font-bold text-lg flex items-center gap-2">
-                    <span className="bg-rodovar-yellow text-black px-2 rounded text-sm">{shipment.code}</span>
-                    <span className="">Painel de Viagem</span>
-                </h2>
-                <div className="text-xs text-gray-400 mt-1 flex items-center gap-2">
-                    <span className="truncate max-w-[100px]">{shipment.origin}</span>
-                    <span>➔</span>
-                    <span className="truncate max-w-[100px]">{shipment.destination}</span>
-                </div>
+            <div className="flex items-center gap-3">
+                 <div className="bg-gray-800 p-2 rounded-full">
+                    <SteeringWheelIcon className="w-5 h-5 text-rodovar-yellow" />
+                 </div>
+                 <div>
+                    <h2 className="text-white font-bold text-sm">Olá, {currentDriver.name}</h2>
+                    <p className="text-xs text-gray-500">Operando Carga: <span className="text-rodovar-yellow font-mono">{shipment.code}</span></p>
+                 </div>
             </div>
             <div className="flex gap-2 w-full md:w-auto">
-                <button onClick={() => setShowInvoice(true)} className="flex-1 md:flex-none text-xs font-bold bg-white text-black px-3 py-2 rounded hover:bg-gray-200 flex items-center justify-center gap-1 shadow-lg transition-transform hover:scale-105 active:scale-95">
-                    📄 Nota Fiscal
-                </button>
-                <button onClick={() => setShipment(null)} className="flex-1 md:flex-none text-xs text-gray-500 hover:text-white border border-gray-700 px-3 py-2 rounded uppercase">
-                    Trocar Carga
-                </button>
+                <button onClick={() => setShowInvoice(true)} className="flex-1 md:flex-none text-xs font-bold bg-white text-black px-3 py-2 rounded hover:bg-gray-200">📄 Nota Fiscal</button>
+                <button onClick={() => setShipment(null)} className="flex-1 md:flex-none text-xs text-gray-500 hover:text-white border border-gray-700 px-3 py-2 rounded uppercase">Trocar Carga</button>
             </div>
         </div>
 
         {/* LAYOUT GRID */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            
-            {/* COLUNA ESQUERDA: CONTROLES */}
             <div className="lg:col-span-1 flex flex-col gap-6 order-2 lg:order-1">
-                
-                {/* BOTÃO PRINCIPAL */}
                 <div className="bg-[#1E1E1E] p-4 md:p-6 rounded-xl border border-gray-700 text-center shadow-xl">
                     <button 
                         onClick={handleUpdateTrip}
                         disabled={isLocating || isTripCompleted}
                         className={`w-full text-xl font-bold py-6 rounded-xl shadow-lg transition-transform active:scale-95 flex flex-col items-center justify-center gap-2 
                         ${isLocating || isTripCompleted ? 'opacity-70 cursor-not-allowed bg-gray-600' : 
-                          isReadyToFinish ? 'bg-green-600 hover:bg-green-500 text-white shadow-[0_0_20px_rgba(34,197,94,0.3)]' : 
-                          'bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_20px_rgba(37,99,235,0.3)]'}`}
+                          isCloseEnoughToFinish ? 'bg-green-600 hover:bg-green-500 text-white animate-pulse' : 
+                          'bg-blue-600 hover:bg-blue-500 text-white'}`}
                     >
-                        {isLocating ? (
-                            <>
-                                <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                                <span className="text-sm">PROCESSANDO...</span>
-                            </>
-                        ) : isTripCompleted ? (
-                            <>
-                                <TruckIcon className="w-8 h-8" />
-                                VIAGEM JÁ CONCLUÍDA
-                            </>
-                        ) : isReadyToFinish ? (
-                            <>
-                                <span className="text-2xl">✅</span>
-                                CONCLUIR VIAGEM
-                            </>
-                        ) : (
-                            <>
-                                <TruckIcon className="w-8 h-8" />
-                                ATUALIZAR VIAGEM
-                            </>
-                        )}
+                        {isLocating ? 'PROCESSANDO...' : isTripCompleted ? 'VIAGEM CONCLUÍDA' : isCloseEnoughToFinish ? 'CONCLUIR VIAGEM' : 'ATUALIZAR VIAGEM'}
                     </button>
                     <p className="text-[10px] text-gray-500 mt-2">
-                        {isReadyToFinish ? 'Você chegou ao destino. Conclua a viagem.' : 'Salva GPS, Gastos e Observações.'}
+                        {isCloseEnoughToFinish && !isTripCompleted 
+                            ? 'Você chegou ao destino! Clique para finalizar.' 
+                            : 'Registra localização e despesas em seu nome.'}
                     </p>
                 </div>
 
-                {/* FORMULÁRIO FINANCEIRO (NOVO - LISTA DE ITENS) */}
                 <div className="bg-[#1E1E1E] p-4 md:p-5 rounded-xl border border-gray-700 space-y-4">
-                    <h3 className="text-rodovar-yellow text-sm font-bold uppercase border-b border-gray-800 pb-2">Lançamento de Despesas</h3>
-                    
+                    <h3 className="text-rodovar-yellow text-sm font-bold uppercase border-b border-gray-800 pb-2">Despesas</h3>
                     <div className="grid grid-cols-1 gap-3">
-                        <div>
-                            <label className="text-[10px] text-gray-400 uppercase font-bold">Tipo</label>
-                            <select 
-                                value={expenseCategory} 
-                                onChange={e => setExpenseCategory(e.target.value as any)}
-                                disabled={isTripCompleted}
-                                className="w-full bg-black/40 border border-gray-600 rounded p-2 text-white text-sm outline-none"
-                            >
-                                <option value="Combustível">Combustível</option>
-                                <option value="Manutenção">Manutenção</option>
-                                <option value="Alimentação">Alimentação</option>
-                                <option value="Outros">Outros</option>
-                            </select>
-                        </div>
-                        
-                        <div>
-                            <label className="text-[10px] text-gray-400 uppercase font-bold">Descrição</label>
-                            <input 
-                                type="text" 
-                                value={expenseDesc}
-                                onChange={e => setExpenseDesc(e.target.value)}
-                                placeholder="Ex: Diesel, Pneu, Almoço..."
-                                disabled={isTripCompleted}
-                                className="w-full bg-black/40 border border-gray-600 rounded p-2 text-white text-sm"
-                            />
-                        </div>
-
+                        <select value={expenseCategory} onChange={e => setExpenseCategory(e.target.value as any)} disabled={isTripCompleted} className="w-full bg-black/40 border border-gray-600 rounded p-2 text-white text-sm">
+                            <option value="Combustível">Combustível</option>
+                            <option value="Manutenção">Manutenção</option>
+                            <option value="Alimentação">Alimentação</option>
+                            <option value="Outros">Outros</option>
+                        </select>
+                        <input value={expenseDesc} onChange={e => setExpenseDesc(e.target.value)} placeholder="Descrição" disabled={isTripCompleted} className="w-full bg-black/40 border border-gray-600 rounded p-2 text-white text-sm" />
                         <div className="flex gap-2">
-                            <div className="flex-1 relative">
-                                <span className="absolute left-3 top-2 text-gray-500 text-sm">R$</span>
-                                <input 
-                                    type="number" 
-                                    value={expenseValue}
-                                    onChange={e => setExpenseValue(e.target.value)}
-                                    placeholder="0.00"
-                                    disabled={isTripCompleted}
-                                    className="w-full bg-black/40 border border-gray-600 rounded p-2 pl-8 text-white text-sm"
-                                />
-                            </div>
-                            <button 
-                                onClick={handleAddExpense}
-                                disabled={isTripCompleted}
-                                className="bg-rodovar-yellow text-black font-bold px-4 rounded hover:bg-yellow-400 disabled:opacity-50 text-xl"
-                            >
-                                +
-                            </button>
+                            <input type="number" value={expenseValue} onChange={e => setExpenseValue(e.target.value)} placeholder="R$ 0.00" disabled={isTripCompleted} className="w-full bg-black/40 border border-gray-600 rounded p-2 text-white text-sm" />
+                            <button onClick={handleAddExpense} disabled={isTripCompleted} className="bg-rodovar-yellow text-black font-bold px-4 rounded text-xl">+</button>
                         </div>
                     </div>
-
-                    {/* Lista de Itens Pendentes */}
                     {pendingExpenses.length > 0 && (
-                        <div className="mt-4 bg-black/30 rounded border border-gray-700 p-2">
-                            <p className="text-[10px] text-blue-400 uppercase mb-2 font-bold">Itens a Adicionar (Pendente):</p>
-                            <div className="space-y-1 max-h-32 overflow-y-auto">
-                                {pendingExpenses.map(item => (
-                                    <div key={item.id} className="flex justify-between items-center text-xs bg-gray-800 p-1.5 rounded">
-                                        <span className="text-gray-300 truncate w-1/2">{item.description}</span>
-                                        <span className="text-rodovar-yellow">R$ {item.value.toFixed(2)}</span>
-                                        <button onClick={() => handleRemovePendingExpense(item.id)} className="text-red-500 font-bold px-2 py-1">✕</button>
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="mt-2 text-right text-xs text-gray-500 border-t border-gray-700 pt-1">
-                                Total Pendente: R$ {pendingExpenses.reduce((acc, cur) => acc + cur.value, 0).toFixed(2)}
-                            </div>
+                        <div className="mt-4 bg-black/30 rounded border border-gray-700 p-2 text-xs">
+                            <p className="text-blue-400 font-bold mb-1">Pendentes de Salvar:</p>
+                            {pendingExpenses.map(item => (
+                                <div key={item.id} className="flex justify-between border-b border-gray-800 py-1">
+                                    <span className="text-gray-300">{item.description}</span>
+                                    <span>R$ {item.value} <button onClick={() => handleRemovePendingExpense(item.id)} className="text-red-500 ml-1">x</button></span>
+                                </div>
+                            ))}
                         </div>
                     )}
-
-                    {/* Notas */}
-                    <div className="space-y-2 pt-4 border-t border-gray-800">
-                        <label className="text-xs text-gray-400 font-bold uppercase">📝 Notas / Ocorrências</label>
-                        <textarea 
-                            value={driverNotes}
-                            onChange={e => setDriverNotes(e.target.value)}
-                            disabled={isTripCompleted}
-                            className="w-full bg-black/40 border border-gray-600 rounded p-2 text-white text-sm h-20 resize-none disabled:opacity-50"
-                            placeholder="Escreva aqui..."
-                        />
-                    </div>
+                    <textarea value={driverNotes} onChange={e => setDriverNotes(e.target.value)} disabled={isTripCompleted} className="w-full bg-black/40 border border-gray-600 rounded p-2 text-white text-sm h-20 resize-none mt-2" placeholder="Observações..." />
                 </div>
             </div>
 
-            {/* COLUNA DIREITA: MAPA (ÚNICO INSTANCE) */}
-            {/* Order muda no mobile para ficar em cima, no desktop fica na direita */}
             <div className="lg:col-span-2 flex flex-col gap-6 order-1 lg:order-2">
-                 
-                 {/* MAPA OTIMIZADO: Altura variavel dependendo da tela */}
                  <div className="bg-[#1E1E1E] rounded-xl border border-gray-700 overflow-hidden relative h-[40vh] lg:h-[500px]">
                      <MapVisualization 
                         coordinates={shipment.currentLocation.coordinates}
@@ -538,166 +420,61 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                         className="w-full h-full absolute inset-0"
                      />
                 </div>
-                
-                {/* Log e Status */}
-                <div className="bg-[#1E1E1E] p-5 rounded-xl border border-gray-700 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-[#1E1E1E] p-5 rounded-xl border border-gray-700 grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                          <p className="text-[10px] text-gray-500 uppercase mb-1">Última Localização</p>
                          <p className="text-white font-bold text-sm md:text-base">{shipment.currentLocation.city} - {shipment.currentLocation.state}</p>
-                         <p className="text-xs text-gray-400">{shipment.currentLocation.address}</p>
                     </div>
-                    <div>
-                        <p className="text-[10px] text-gray-500 uppercase mb-1">Status do Sistema</p>
-                        <p className={`text-xs font-mono ${lastUpdateLog.includes('Erro') ? 'text-red-400' : 'text-green-400'}`}>
-                            {lastUpdateLog || "Aguardando atualização..."}
-                        </p>
-                        
-                        <div className="mt-2">
-                            <div className="flex justify-between text-[10px] text-gray-500 uppercase">
-                                <span>Progresso</span>
-                                <span>{shipment.progress}%</span>
-                            </div>
-                            <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden mt-1">
-                                <div className={`h-full ${isTripCompleted ? 'bg-green-500' : 'bg-rodovar-yellow'}`} style={{ width: `${shipment.progress}%` }}></div>
-                            </div>
-                        </div>
+                    {/* NEW DISTANCE BOX */}
+                    <div className="border-l border-gray-800 pl-4">
+                         <p className="text-[10px] text-gray-500 uppercase mb-1">Distância até o Destino</p>
+                         <p className="text-rodovar-yellow font-bold text-lg md:text-xl">
+                            {remainingDistanceKm !== null 
+                                ? (remainingDistanceKm < 1 ? `${(remainingDistanceKm * 1000).toFixed(0)} metros` : `${remainingDistanceKm.toFixed(1)} km`)
+                                : '--'
+                            }
+                         </p>
+                    </div>
+                    <div className="border-l border-gray-800 pl-4">
+                        <p className="text-[10px] text-gray-500 uppercase mb-1">Status</p>
+                        <p className={`text-xs font-mono ${lastUpdateLog.includes('Erro') ? 'text-red-400' : 'text-green-400'}`}>{lastUpdateLog || "Pronto para atualizar"}</p>
                     </div>
                 </div>
             </div>
         </div>
 
-        {/* --- MODAL DE NOTA FISCAL (RESPONSIVO) --- */}
+        {/* MODAL NOTA FISCAL (COMPLETO) */}
         {showInvoice && (
-            <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-start md:items-center justify-center p-0 md:p-4 overflow-y-auto print:p-0 print:static print:bg-white print:inset-auto print:block">
-                <div className="bg-white text-black w-full min-h-screen md:min-h-0 md:h-auto max-w-3xl p-4 md:p-8 rounded-none md:rounded-lg shadow-2xl relative print:shadow-none print:w-full print:max-w-none print:h-auto print:rounded-none overflow-y-auto">
-                    
-                    <div className="flex justify-end mb-2 print:hidden">
-                         <button 
-                            onClick={() => setShowInvoice(false)}
-                            className="text-gray-500 hover:text-red-600 font-bold px-3 py-1 border border-gray-300 rounded bg-gray-100"
-                        >
-                            FECHAR ✕
-                        </button>
-                    </div>
-
-                    <div id="printable-invoice" className="space-y-6 text-black p-2 md:p-0">
-                        {/* Cabeçalho */}
-                        <div className="border-b-2 border-black pb-4 flex flex-col md:flex-row justify-between items-start gap-4">
-                            <div>
-                                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tighter text-black">RODOVAR</h1>
-                                <p className="text-xs md:text-sm font-bold uppercase text-black">Transportes e Logística LTDA</p>
-                                <p className="text-[10px] text-black mt-1">CNPJ: 54.094.853/0001-69</p>
-                            </div>
-                            <div className="text-left md:text-right w-full md:w-auto">
-                                <h2 className="text-lg md:text-xl font-bold text-black">COMPROVANTE</h2>
-                                <p className="font-mono text-base md:text-lg text-black">{shipment.code}</p>
-                                <p className="text-[10px] mt-1 text-black">Emissão: {new Date().toLocaleString()}</p>
-                            </div>
+            <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+                <div className="bg-white !text-black w-full max-w-3xl p-8 rounded shadow-2xl relative h-auto max-h-[90vh] overflow-y-auto">
+                    <button onClick={() => setShowInvoice(false)} className="absolute top-4 right-4 font-bold text-gray-500">FECHAR X</button>
+                    <div id="printable-invoice" className="space-y-6 !text-black">
+                        <div className="border-b-2 border-black pb-4 flex justify-between">
+                            <div><h1 className="text-3xl font-black text-black">RODOVAR</h1><p className="text-xs text-black">LOGÍSTICA LTDA</p></div>
+                            <div className="text-right"><h2 className="text-xl font-bold text-black">COMPROVANTE</h2><p className="text-black">{shipment.code}</p></div>
                         </div>
-
-                        {/* Detalhes da Rota */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8">
-                            <div>
-                                <h3 className="text-xs font-bold uppercase border-b border-gray-300 mb-2 text-black">Origem</h3>
-                                <p className="font-bold text-base md:text-lg text-black">{shipment.origin}</p>
-                            </div>
-                            <div>
-                                <h3 className="text-xs font-bold uppercase border-b border-gray-300 mb-2 text-black">Destino</h3>
-                                <p className="font-bold text-base md:text-lg text-black">{shipment.destination}</p>
-                                <p className="text-[10px] md:text-xs text-gray-600">{shipment.destinationAddress}</p>
-                            </div>
+                        <div className="grid grid-cols-2 gap-8">
+                            <div><h3 className="font-bold border-b border-gray-300 text-black">ORIGEM</h3><p className="text-black">{shipment.origin}</p></div>
+                            <div><h3 className="font-bold border-b border-gray-300 text-black">DESTINO</h3><p className="text-black">{shipment.destination}</p><p className="text-xs text-black">{shipment.destinationAddress}</p></div>
                         </div>
-
-                         {/* Status */}
-                        <div className="bg-gray-100 p-3 md:p-4 rounded border border-gray-300">
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                                <div>
-                                    <span className="text-[10px] font-bold uppercase text-gray-500">Status</span>
-                                    <p className="font-bold text-black text-sm">{StatusLabels[shipment.status]}</p>
-                                </div>
-                                <div>
-                                    <span className="text-[10px] font-bold uppercase text-gray-500">Local Atual</span>
-                                    <p className="text-xs md:text-sm text-black">{shipment.currentLocation.city} - {shipment.currentLocation.state}</p>
-                                </div>
-                                <div className="col-span-2 md:col-span-1">
-                                    <span className="text-[10px] font-bold uppercase text-gray-500">Atualização</span>
-                                    <p className="text-xs md:text-sm text-black">{shipment.lastUpdate}</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Financeiro (Lista Completa) - Com Scroll Horizontal no Mobile */}
                         <div>
-                            <h3 className="font-bold uppercase text-sm mb-2 bg-black text-white px-2 py-1">Relatório de Despesas</h3>
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm text-left border border-gray-300 min-w-[500px] md:min-w-full">
-                                    <thead>
-                                        <tr className="bg-gray-100 border-b border-gray-300">
-                                            <th className="p-2 border-r text-black w-24">Tipo</th>
-                                            <th className="p-2 border-r text-black">Descrição</th>
-                                            <th className="p-2 border-r text-black w-32">Data</th>
-                                            <th className="p-2 text-right text-black w-28">Valor (R$)</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {(!shipment.expenses || shipment.expenses.length === 0) ? (
-                                             <tr>
-                                                <td colSpan={4} className="p-4 text-center text-gray-500 italic">Nenhuma despesa lançada.</td>
-                                             </tr>
-                                        ) : (
-                                            shipment.expenses.map((exp, idx) => (
-                                                <tr key={exp.id || idx} className="border-b border-gray-200">
-                                                    <td className="p-2 border-r font-bold text-black text-xs uppercase">{exp.category}</td>
-                                                    <td className="p-2 border-r text-black">{exp.description}</td>
-                                                    <td className="p-2 border-r text-black text-xs">
-                                                        {new Date(exp.date).toLocaleString()}
-                                                    </td>
-                                                    <td className="p-2 text-right text-black">R$ {exp.value.toFixed(2)}</td>
-                                                </tr>
-                                            ))
-                                        )}
-                                        
-                                        <tr className="bg-gray-50 font-bold border-t-2 border-black">
-                                            <td className="p-2 text-right text-black uppercase" colSpan={3}>TOTAL GERAL</td>
-                                            <td className="p-2 text-right text-black">
-                                                R$ {(shipment.expenses?.reduce((acc, cur) => acc + cur.value, 0) || 0).toFixed(2)}
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
+                             <h3 className="font-bold bg-black text-white px-2">MOTORISTA RESPONSÁVEL</h3>
+                             <p className="p-2 border border-gray-300 font-bold text-black">{currentDriver.name}</p>
                         </div>
-
-                        {/* Obs */}
-                        <div>
-                            <h3 className="text-xs font-bold uppercase mb-1 text-black">Observações do Motorista</h3>
-                            <div className="border border-gray-300 p-3 min-h-[60px] text-sm bg-gray-50 italic text-black break-words">
-                                {shipment.driverNotes || "Nenhuma observação registrada."}
-                            </div>
-                        </div>
-
-                        {/* Assinaturas */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12 pt-8 md:pt-12 mt-4 md:mt-8 border-t border-black">
-                            <div className="text-center">
-                                <div className="border-t border-black w-2/3 mx-auto mb-2"></div>
-                                <p className="text-xs uppercase font-bold text-black">Assinatura do Motorista</p>
-                            </div>
-                            <div className="text-center hidden md:block">
-                                <div className="border-t border-black w-2/3 mx-auto mb-2"></div>
-                                <p className="text-xs uppercase font-bold text-black">Assinatura do Responsável</p>
-                            </div>
+                        <table className="w-full text-sm border border-gray-300 !text-black">
+                            <thead><tr className="bg-gray-100"><th className="p-2 text-left text-black">DESPESA</th><th className="p-2 text-right text-black">VALOR</th></tr></thead>
+                            <tbody>
+                                {shipment.expenses?.map((e, i) => <tr key={i} className="border-b"><td className="p-2 text-black">{e.description}</td><td className="p-2 text-right text-black">R$ {e.value.toFixed(2)}</td></tr>)}
+                                <tr className="font-bold bg-gray-50"><td className="p-2 text-right text-black">TOTAL</td><td className="p-2 text-right text-black">R$ {shipment.expenses?.reduce((a, b) => a + b.value, 0).toFixed(2)}</td></tr>
+                            </tbody>
+                        </table>
+                        <div className="mt-8 pt-8 border-t border-black grid grid-cols-2 gap-12 text-center text-xs font-bold uppercase text-black">
+                            <div><div className="border-t border-black w-2/3 mx-auto mb-2"></div>{currentDriver.name}</div>
+                            <div><div className="border-t border-black w-2/3 mx-auto mb-2"></div>RODOVAR LOGÍSTICA</div>
                         </div>
                     </div>
-
-                    <div className="mt-6 md:mt-8 flex justify-end gap-4 print:hidden pb-8 md:pb-0">
-                        <button 
-                            onClick={handleDownloadPDF} 
-                            disabled={isGeneratingPdf}
-                            className={`w-full md:w-auto bg-black text-white px-6 py-3 rounded font-bold hover:bg-gray-800 shadow-lg flex items-center justify-center gap-2 ${isGeneratingPdf ? 'opacity-70 cursor-wait' : 'animate-pulse'}`}
-                        >
-                            <span>{isGeneratingPdf ? '⏳' : '💾'}</span> 
-                            {isGeneratingPdf ? 'GERANDO PDF...' : 'BAIXAR COMPROVANTE'}
-                        </button>
+                    <div className="mt-8 text-right">
+                        <button onClick={handleDownloadPDF} disabled={isGeneratingPdf} className="bg-black text-white px-6 py-3 rounded font-bold hover:bg-gray-800">{isGeneratingPdf ? 'GERANDO...' : 'BAIXAR PDF'}</button>
                     </div>
                 </div>
             </div>

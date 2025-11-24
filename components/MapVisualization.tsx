@@ -34,12 +34,11 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
         preferCanvas: true // Performance boost for markers/lines
     });
 
-    // Dark Matter Tiles (CartoDB)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 20,
-        keepBuffer: 2
+    // Standard OpenStreetMap (Colorful & Detailed)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19,
+        className: 'map-tiles'
     }).addTo(map);
 
     mapInstanceRef.current = map;
@@ -87,12 +86,12 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
 
     const bounds = L.latLngBounds([]);
 
-    // 1. Add User Marker (Blue) - Optimized (removed heavy animate-ping)
+    // 1. Add User Marker (Blue)
     if (userLocation) {
         const userIcon = L.divIcon({
             className: 'custom-div-icon',
             html: `<div class="relative flex items-center justify-center w-6 h-6">
-                     <div class="relative w-3 h-3 bg-blue-500 border-2 border-white rounded-full shadow-lg"></div>
+                     <div class="relative w-3 h-3 bg-blue-600 border-2 border-white rounded-full shadow-lg"></div>
                    </div>`,
             iconSize: [24, 24],
             iconAnchor: [12, 12]
@@ -111,7 +110,7 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
         const destIcon = L.divIcon({
             className: 'custom-div-icon',
             html: `<div class="relative flex items-center justify-center w-6 h-6">
-                     <div class="relative w-4 h-4 bg-red-600 border-2 border-white rounded-sm transform rotate-45"></div>
+                     <div class="relative w-4 h-4 bg-red-600 border-2 border-white rounded-sm transform rotate-45 shadow-md"></div>
                    </div>`,
             iconSize: [24, 24],
             iconAnchor: [12, 12]
@@ -125,20 +124,23 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
         bounds.extend([destinationCoordinates.lat, destinationCoordinates.lng]);
     }
 
-    // 3. Add Cargo Marker (Yellow)
+    // 3. Add Cargo Marker (Yellow Truck Style)
     if (coordinates) {
         const cargoIcon = L.divIcon({
             className: 'custom-div-icon',
-            html: `<div class="relative flex items-center justify-center w-8 h-8">
-                     <div class="relative w-5 h-5 bg-rodovar-yellow border-2 border-black rounded-full shadow-[0_0_10px_#FFD700]"></div>
+            html: `<div class="relative flex items-center justify-center w-10 h-10">
+                     <div class="relative w-6 h-6 bg-rodovar-yellow border-2 border-black rounded-full shadow-xl z-10 flex items-center justify-center">
+                        <div class="w-2 h-2 bg-black rounded-full"></div>
+                     </div>
+                     <div class="absolute w-full h-full bg-rodovar-yellow/30 rounded-full animate-ping opacity-75"></div>
                    </div>`,
-            iconSize: [32, 32],
-            iconAnchor: [16, 16]
+            iconSize: [40, 40],
+            iconAnchor: [20, 20]
         });
 
         const cargoMarker = L.marker([coordinates.lat, coordinates.lng], { icon: cargoIcon })
             .addTo(map)
-            .bindPopup("<b>CARGA</b>");
+            .bindPopup("<b>CARGA (RODOVAR)</b>");
 
         markersRef.current.push(cargoMarker);
         bounds.extend([coordinates.lat, coordinates.lng]);
@@ -154,16 +156,16 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
         ];
 
         const line = L.polyline(latlngs, {
-            color: '#3B82F6',
-            weight: 2,
-            opacity: 0.5,
-            dashArray: '5, 5'
+            color: '#2563EB', // Blue 600
+            weight: 3,
+            opacity: 0.7,
+            dashArray: '10, 10'
         }).addTo(map);
         
         polylinesRef.current.push(line);
     }
 
-    // Line: Cargo -> Destination (Yellow Dashed)
+    // Line: Cargo -> Destination (Black Dashed for Contrast on Light Map)
     if (coordinates && destinationCoordinates && (destinationCoordinates.lat !== 0 || destinationCoordinates.lng !== 0)) {
          const latlngs = [
             [coordinates.lat, coordinates.lng],
@@ -171,10 +173,10 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
         ];
 
         const line = L.polyline(latlngs, {
-            color: '#FFD700',
-            weight: 3,
-            opacity: 0.8,
-            dashArray: '10, 10'
+            color: '#000000',
+            weight: 4,
+            opacity: 0.7,
+            dashArray: '10, 15'
         }).addTo(map);
 
         polylinesRef.current.push(line);
@@ -182,7 +184,7 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
 
     // Fit bounds if we have points
     if (bounds.isValid()) {
-        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
+        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
     } else {
         map.setView([-14.2350, -51.9253], 4);
     }
@@ -190,20 +192,20 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
   }, [coordinates, userLocation, destinationCoordinates]);
 
   return (
-    <div className={`relative bg-rodovar-gray rounded-xl overflow-hidden border border-gray-700 shadow-2xl ${className}`}>
+    <div className={`relative bg-gray-100 rounded-xl overflow-hidden border border-gray-700 shadow-2xl ${className}`}>
       {/* Simplified Overlay */}
       <div className="absolute top-4 left-4 z-[400] pointer-events-none">
-          <h3 className="text-rodovar-yellow text-[10px] font-bold tracking-widest uppercase bg-black/80 px-2 py-1 rounded">
+          <h3 className="text-black bg-rodovar-yellow text-[10px] font-bold tracking-widest uppercase px-2 py-1 rounded shadow-md border border-black/20">
             Satélite Online
           </h3>
       </div>
       
       {/* Map Container */}
-      <div ref={mapContainerRef} className="w-full h-full min-h-[300px] z-0 bg-[#121212]" />
+      <div ref={mapContainerRef} className="w-full h-full min-h-[300px] z-0 bg-[#e5e5e5]" />
 
       {loading && (
-        <div className="absolute inset-0 z-[500] bg-black/70 flex items-center justify-center">
-            <span className="text-rodovar-yellow font-bold text-xs animate-pulse">CARREGANDO MAPA...</span>
+        <div className="absolute inset-0 z-[500] bg-black/50 flex items-center justify-center backdrop-blur-sm">
+            <span className="text-white bg-black px-4 py-2 rounded-full font-bold text-xs animate-pulse">CARREGANDO MAPA...</span>
         </div>
       )}
     </div>

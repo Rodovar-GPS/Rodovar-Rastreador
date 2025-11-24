@@ -1,11 +1,11 @@
-import { TrackingData, Coordinates, AdminUser } from '../types';
+import { TrackingData, Coordinates, AdminUser, Driver } from '../types';
 
 const STORAGE_KEY = 'rodovar_shipments_db_v1';
 const USERS_KEY = 'rodovar_users_db_v1';
+const DRIVERS_KEY = 'rodovar_drivers_db_v1';
 
-// --- AUTH SERVICE ---
+// --- AUTH SERVICE (ADMIN) ---
 
-// Inicializa com usuário padrão se não existir
 const initUsers = () => {
   const users = localStorage.getItem(USERS_KEY);
   if (!users) {
@@ -23,7 +23,7 @@ export const getAllUsers = (): AdminUser[] => {
 export const saveUser = (user: AdminUser): boolean => {
   const users = getAllUsers();
   if (users.some(u => u.username === user.username)) {
-    return false; // Usuário já existe
+    return false;
   }
   users.push(user);
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
@@ -32,9 +32,7 @@ export const saveUser = (user: AdminUser): boolean => {
 
 export const deleteUser = (username: string): void => {
   let users = getAllUsers();
-  // Impede deletar o último usuário ou o admin principal se desejar (opcional, aqui permite tudo menos esvaziar)
   if (users.length <= 1) return; 
-  
   users = users.filter(u => u.username !== username);
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
 };
@@ -44,12 +42,42 @@ export const validateLogin = (user: AdminUser): boolean => {
   return users.some(u => u.username === user.username && u.password === user.password);
 };
 
+// --- DRIVER SERVICE ---
+
+export const getAllDrivers = (): Driver[] => {
+  const drivers = localStorage.getItem(DRIVERS_KEY);
+  return drivers ? JSON.parse(drivers) : [];
+};
+
+export const saveDriver = (driver: Driver): boolean => {
+  const drivers = getAllDrivers();
+  // Verifica duplicidade por nome (simplificado)
+  if (drivers.some(d => d.name.toLowerCase() === driver.name.toLowerCase())) {
+     return false;
+  }
+  drivers.push(driver);
+  localStorage.setItem(DRIVERS_KEY, JSON.stringify(drivers));
+  return true;
+};
+
+export const deleteDriver = (id: string): void => {
+  let drivers = getAllDrivers();
+  drivers = drivers.filter(d => d.id !== id);
+  localStorage.setItem(DRIVERS_KEY, JSON.stringify(drivers));
+};
+
+export const validateDriverLogin = (name: string, password: string): Driver | null => {
+    const drivers = getAllDrivers();
+    // Busca insensível a maiúsculas/minúsculas para o nome
+    return drivers.find(d => d.name.toLowerCase() === name.toLowerCase() && d.password === password) || null;
+};
+
+
 // --- GEO & SHIPMENT SERVICE ---
 
 // Função auxiliar para buscar coordenadas reais baseadas na cidade (Nominatim)
 export const getCoordinatesForCity = async (city: string, state: string): Promise<Coordinates> => {
   try {
-    // Limpa a string para melhor busca
     const cleanCity = city.trim();
     const cleanState = state.trim();
     
@@ -63,7 +91,6 @@ export const getCoordinatesForCity = async (city: string, state: string): Promis
         lng: parseFloat(data[0].lon)
       };
     }
-    // Fallback coordinates (Center of Brazil) if not found
     return { lat: -14.2350, lng: -51.9253 };
   } catch (error) {
     console.error("Erro ao buscar coordenadas:", error);
@@ -71,10 +98,18 @@ export const getCoordinatesForCity = async (city: string, state: string): Promis
   }
 };
 
-// Função para buscar coordenadas apenas pelo nome (usado para origem/destino se não tiver estado separado)
-export const getCoordinatesForString = async (locationString: string): Promise<Coordinates> => {
+// ATUALIZADO: Busca inteligente. Tenta endereço completo primeiro, depois cai para cidade/estado.
+export const getCoordinatesForString = async (locationString: string, detailedAddress?: string): Promise<Coordinates> => {
     try {
-        const query = `${locationString}, Brazil`;
+        let query = `${locationString}, Brazil`;
+        
+        // Se tiver endereço detalhado, tenta usar ele concatenado com a cidade para maior precisão
+        if (detailedAddress && detailedAddress.length > 3) {
+             query = `${detailedAddress}, ${locationString}, Brazil`;
+        }
+
+        console.log("Geocoding Query:", query); // Debug
+
         const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`);
         const data = await response.json();
         
@@ -83,16 +118,20 @@ export const getCoordinatesForString = async (locationString: string): Promise<C
             lat: parseFloat(data[0].lat),
             lng: parseFloat(data[0].lon)
           };
+        } else if (detailedAddress) {
+            // Se falhou com endereço completo, tenta só com a cidade/local genérico (fallback)
+            return getCoordinatesForString(locationString);
         }
-        return { lat: 0, lng: 0 }; // Return 0 to indicate failure
+
+        return { lat: 0, lng: 0 }; 
     } catch (error) {
         return { lat: 0, lng: 0 };
     }
 }
 
-// Fórmula de Haversine para calcular distância em KM entre dois pontos
-function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371; // Radius of the earth in km
+// Exportada para uso no frontend (DriverPanel)
+export function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; 
   const dLat = deg2rad(lat2 - lat1);
   const dLon = deg2rad(lon2 - lon1);
   const a =
@@ -100,7 +139,7 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
     Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  const d = R * c; // Distance in km
+  const d = R * c; 
   return d;
 }
 
@@ -109,7 +148,7 @@ function deg2rad(deg: number) {
 }
 
 export const calculateProgress = (origin: Coordinates, destination: Coordinates, current: Coordinates): number => {
-    // Se não conseguiu achar as coordenadas, retorna 0 ou mantém o atual
+    // Se não tiver coordenadas válidas de origem ou destino, progresso é zero.
     if ((origin.lat === 0 && origin.lng === 0) || (destination.lat === 0 && destination.lng === 0)) {
         return 0;
     }
@@ -117,15 +156,17 @@ export const calculateProgress = (origin: Coordinates, destination: Coordinates,
     const totalDistance = getDistanceFromLatLonInKm(origin.lat, origin.lng, destination.lat, destination.lng);
     const remainingDistance = getDistanceFromLatLonInKm(current.lat, current.lng, destination.lat, destination.lng);
 
-    if (totalDistance === 0) return 100; // Origem e destino iguais
+    // Evita divisão por zero
+    if (totalDistance <= 0.1) return 100;
 
-    // Progresso = 1 - (Falta / Total)
     let percentage = (1 - (remainingDistance / totalDistance)) * 100;
 
-    // Ajustes finos
-    if (percentage < 0) percentage = 0; // Se estiver antes da origem (erro de GPS)
-    if (percentage > 100) percentage = 100; // Se já passou ou chegou
-    if (remainingDistance < 5) percentage = 100; // Margem de erro de 5km para considerar entregue
+    // Ajustes finos de limites
+    if (percentage < 0) percentage = 0; 
+    if (percentage > 100) percentage = 100; 
+
+    // Removemos a trava de "remainingDistance < 5" para deixar o cálculo fluido até o fim.
+    // A decisão de "Concluir" será feita pelo botão no Frontend baseada na distância real.
 
     return Math.round(percentage);
 };

@@ -6,6 +6,7 @@ import MapVisualization from './components/MapVisualization';
 import AdminPanel from './components/AdminPanel';
 import LoginPanel from './components/LoginPanel';
 import DriverPanel from './components/DriverPanel';
+import { getDistanceFromLatLonInKm } from './services/storageService';
 
 type AppView = 'tracking' | 'login' | 'admin' | 'driver';
 
@@ -18,6 +19,7 @@ const App: React.FC = () => {
   const [trackingData, setTrackingData] = useState<TrackingData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [remainingDistance, setRemainingDistance] = useState<number | null>(null);
   
   // Location States
   const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
@@ -76,10 +78,24 @@ const App: React.FC = () => {
     setLoading(true);
     setError(null);
     setTrackingData(null);
+    setRemainingDistance(null);
 
     try {
       const data = await fetchTrackingInfo(trackingCode);
       setTrackingData(data);
+      
+      // Calculate initial distance
+      if (data.currentLocation.coordinates && data.destinationCoordinates && 
+         (data.destinationCoordinates.lat !== 0 || data.destinationCoordinates.lng !== 0)) {
+           const dist = getDistanceFromLatLonInKm(
+               data.currentLocation.coordinates.lat,
+               data.currentLocation.coordinates.lng,
+               data.destinationCoordinates.lat,
+               data.destinationCoordinates.lng
+           );
+           setRemainingDistance(Math.round(dist));
+      }
+
     } catch (err: any) {
       setError(err.message || "Não existe cadastro com a numeração informada.");
     } finally {
@@ -335,7 +351,16 @@ const App: React.FC = () => {
                                     )}
 
                                     <p className="text-xl md:text-2xl font-bold text-white mt-1">{trackingData.currentLocation.city}, {trackingData.currentLocation.state}</p>
-                                    <p className="text-xs md:text-sm text-rodovar-yellow mt-1 font-medium">"{trackingData.message}"</p>
+                                    
+                                    {/* DRIVER INFO ADDED HERE */}
+                                    {trackingData.driverName && (
+                                        <div className="flex items-center gap-2 mt-2 bg-gray-800/50 w-fit px-3 py-1 rounded-full border border-gray-700">
+                                            <SteeringWheelIcon className="w-4 h-4 text-rodovar-yellow" />
+                                            <span className="text-xs text-gray-300">Motorista: <span className="text-white font-bold">{trackingData.driverName}</span></span>
+                                        </div>
+                                    )}
+
+                                    <p className="text-xs md:text-sm text-rodovar-yellow mt-2 font-medium">"{trackingData.message}"</p>
                                 </div>
 
                                 {/* Origin/Dest */}
@@ -367,14 +392,21 @@ const App: React.FC = () => {
                                 </div>
                             )}
 
-                            <div className="bg-black/30 rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-4 border border-gray-800">
+                            <div className="bg-black/30 rounded-xl p-4 grid grid-cols-1 md:grid-cols-3 gap-4 border border-gray-800">
                                 <div>
                                     <h4 className="text-gray-500 text-[10px] uppercase mb-1">Última Atualização</h4>
                                     <p className="font-mono text-xs md:text-sm text-gray-300">{trackingData.lastUpdate}</p>
                                 </div>
-                                <div>
+                                <div className="border-l border-gray-800 pl-4 md:pl-0 md:border-l-0">
                                     <h4 className="text-gray-500 text-[10px] uppercase mb-1">Entrega Estimada</h4>
                                     <p className="font-mono text-xs md:text-sm text-rodovar-yellow">{trackingData.estimatedDelivery}</p>
+                                </div>
+                                {/* NEW DISTANCE INFO */}
+                                <div className="border-l border-gray-800 pl-4 md:pl-0 md:border-l-0">
+                                     <h4 className="text-gray-500 text-[10px] uppercase mb-1">Distância Restante</h4>
+                                     <p className="font-mono text-sm md:text-base text-rodovar-yellow font-bold">
+                                         {remainingDistance !== null ? `${remainingDistance} km` : '--'}
+                                     </p>
                                 </div>
                             </div>
 
