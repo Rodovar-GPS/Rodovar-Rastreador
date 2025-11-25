@@ -295,7 +295,7 @@ const App: React.FC = () => {
                         type="text" 
                         value={trackingCode}
                         onChange={(e) => setTrackingCode(e.target.value.toUpperCase())}
-                        placeholder="CÓDIGO (Ex: RODO-001)"
+                        placeholder="CÓDIGO (Ex: RODO-001) ou CELULAR DO MOTORISTA"
                         className="w-full bg-[#1E1E1E] border-2 border-gray-700 text-white px-4 py-3 md:px-6 md:py-4 rounded-full focus:outline-none focus:border-rodovar-yellow focus:ring-1 focus:ring-rodovar-yellow transition-all text-base md:text-lg tracking-wider shadow-2xl placeholder-gray-600"
                     />
                     <button 

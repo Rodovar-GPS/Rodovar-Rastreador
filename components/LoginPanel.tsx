@@ -10,13 +10,22 @@ const LoginPanel: React.FC<LoginPanelProps> = ({ onLoginSuccess, onCancel }) => 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (validateLogin({ username, password })) {
-      onLoginSuccess(username);
-    } else {
-      setError('Usuário ou senha incorretos.');
+    setLoading(true);
+    try {
+        const isValid = await validateLogin({ username, password });
+        if (isValid) {
+          onLoginSuccess(username);
+        } else {
+          setError('Usuário ou senha incorretos.');
+        }
+    } catch (err) {
+        setError('Erro ao conectar ao sistema.');
+    } finally {
+        setLoading(false);
     }
   };
 
@@ -66,9 +75,10 @@ const LoginPanel: React.FC<LoginPanelProps> = ({ onLoginSuccess, onCancel }) => 
 
           <button 
             type="submit"
-            className="w-full bg-rodovar-yellow text-black font-bold py-3 rounded-lg hover:bg-yellow-400 transition-colors shadow-[0_0_10px_rgba(255,215,0,0.2)]"
+            disabled={loading}
+            className="w-full bg-rodovar-yellow text-black font-bold py-3 rounded-lg hover:bg-yellow-400 transition-colors shadow-[0_0_10px_rgba(255,215,0,0.2)] disabled:opacity-50"
           >
-            ENTRAR NO SISTEMA
+            {loading ? 'VERIFICANDO...' : 'ENTRAR NO SISTEMA'}
           </button>
         </form>
       </div>

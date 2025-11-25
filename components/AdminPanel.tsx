@@ -6,7 +6,7 @@ import {
     saveUser, getAllUsers, deleteUser,
     getAllDrivers, saveDriver, deleteDriver
 } from '../services/storageService';
-import { TruckIcon, MapPinIcon, SearchIcon, SteeringWheelIcon } from './Icons';
+import { TruckIcon, MapPinIcon, SearchIcon, SteeringWheelIcon, WhatsAppIcon } from './Icons';
 
 interface AdminPanelProps {
   onClose: () => void;
@@ -29,7 +29,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
     return `${hours}:${minutes} - ${day}/${month}/${year}`;
   };
 
-  // Retorna YYYY-MM-DD para o input type="date"
   const getFutureDateInputFormat = (daysToAdd: number) => {
     const date = new Date();
     date.setDate(date.getDate() + daysToAdd);
@@ -39,14 +38,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
     return `${year}-${month}-${day}`;
   };
 
-  // Converte YYYY-MM-DD (Input) -> DD/MM/YYYY (Storage/Display)
   const formatDateToBr = (isoDate: string) => {
       if (!isoDate) return '';
       const [year, month, day] = isoDate.split('-');
       return `${day}/${month}/${year}`;
   };
 
-  // Converte DD/MM/YYYY (Storage) -> YYYY-MM-DD (Input)
   const formatDateFromBr = (brDate: string) => {
       if (!brDate) return '';
       const parts = brDate.split('/');
@@ -78,7 +75,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
   const [driverNotes, setDriverNotes] = useState('');
   const [expensesList, setExpensesList] = useState<Expense[]>([]);
   
-  // State específico para o input de data (YYYY-MM-DD)
   const [estimatedDateInput, setEstimatedDateInput] = useState(getFutureDateInputFormat(3));
   
   const [updateTime, setUpdateTime] = useState(getNowFormatted());
@@ -95,6 +91,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
   // States for New Driver Form
   const [newDriverName, setNewDriverName] = useState('');
   const [newDriverPass, setNewDriverPass] = useState('');
+  const [newDriverPhone, setNewDriverPhone] = useState('');
   const [driverMsg, setDriverMsg] = useState('');
 
   useEffect(() => {
@@ -112,16 +109,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
     }
   }, [shipments, isEditing]);
 
-  const loadShipments = () => {
-    setShipments(getAllShipments());
+  const loadShipments = async () => {
+    setLoading(true);
+    const data = await getAllShipments();
+    setShipments(data);
+    setLoading(false);
   };
 
-  const loadUsers = () => {
-    setUsers(getAllUsers());
+  const loadUsers = async () => {
+    setUsers(await getAllUsers());
   };
 
-  const loadDrivers = () => {
-    setDrivers(getAllDrivers());
+  const loadDrivers = async () => {
+    setDrivers(await getAllDrivers());
   };
 
   const generateNextCode = (currentShipments: Record<string, TrackingData>): string => {
@@ -211,17 +211,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
     try {
         const currentCoords = await getCoordinatesForCity(city, state);
         
-        // Busca coordenadas de origem e destino
         const originCoords = await getCoordinatesForString(origin);
         const destCoords = await getCoordinatesForString(destination, destinationAddress);
         
         const calculatedProgress = calculateProgress(originCoords, destCoords, currentCoords);
         setDisplayProgress(calculatedProgress);
 
-        // Find driver name for cache
         const assignedDriver = drivers.find(d => d.id === selectedDriverId);
-
-        // Converte data do input (YYYY-MM-DD) para formato de display (DD/MM/YYYY)
         const finalDate = formatDateToBr(estimatedDateInput);
 
         const newData: TrackingData = {
@@ -239,7 +235,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
             destinationCoordinates: destCoords, 
             lastUpdate: updateTime,
             lastUpdatedBy: currentUser,
-            estimatedDelivery: finalDate, // Salva formatado
+            estimatedDelivery: finalDate,
             message,
             notes,
             progress: calculatedProgress,
@@ -253,8 +249,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
             fuelCost: 0
         };
 
-        saveShipment(newData);
-        loadShipments();
+        await saveShipment(newData);
+        await loadShipments(); // Reload to get sync
         alert(`Carga ${code} salva!`);
         
         if (!isEditing) {
@@ -282,7 +278,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
     setNotes(data.notes || '');
     setDisplayProgress(data.progress);
     
-    // Converte data de armazenamento (DD/MM/YYYY) para input (YYYY-MM-DD)
     setEstimatedDateInput(formatDateFromBr(data.estimatedDelivery));
     
     setUpdateTime(getNowFormatted());
@@ -298,65 +293,79 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
       resetForm();
   };
 
-  const handleDeleteShipment = (codeToDelete: string) => {
+  const handleDeleteShipment = async (codeToDelete: string) => {
     if (confirm(`Excluir a carga ${codeToDelete}?`)) {
-      deleteShipment(codeToDelete);
-      loadShipments();
+      await deleteShipment(codeToDelete);
+      await loadShipments();
       if (code === codeToDelete) resetForm();
     }
   };
 
   // --- HANDLERS FOR USERS ---
-  const handleSaveUser = (e: React.FormEvent) => {
+  const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUsername || !newPassword) return;
-    const success = saveUser({ username: newUsername, password: newPassword });
+    const success = await saveUser({ username: newUsername, password: newPassword });
     if (success) {
         setNewUsername('');
         setNewPassword('');
         setUserMsg('Usuário criado!');
-        loadUsers();
+        await loadUsers();
         setTimeout(() => setUserMsg(''), 3000);
     } else {
         setUserMsg('Usuário já existe.');
     }
   };
 
-  const handleDeleteUser = (username: string) => {
+  const handleDeleteUser = async (username: string) => {
       if (confirm(`Remover ${username}?`)) {
-          deleteUser(username);
-          loadUsers();
+          await deleteUser(username);
+          await loadUsers();
       }
   };
 
   // --- HANDLERS FOR DRIVERS ---
-  const handleSaveDriver = (e: React.FormEvent) => {
+  const handleSaveDriver = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!newDriverName || !newDriverPass) return;
       
       const newDriver: Driver = {
           id: Date.now().toString(),
           name: newDriverName,
-          password: newDriverPass
+          password: newDriverPass,
+          phone: newDriverPhone
       };
 
-      const success = saveDriver(newDriver);
+      const success = await saveDriver(newDriver);
       if (success) {
           setNewDriverName('');
           setNewDriverPass('');
+          setNewDriverPhone('');
           setDriverMsg('Motorista cadastrado!');
-          loadDrivers();
+          await loadDrivers();
           setTimeout(() => setDriverMsg(''), 3000);
       } else {
           setDriverMsg('Erro: Nome já existe.');
       }
   };
 
-  const handleDeleteDriver = (id: string) => {
+  const handleDeleteDriver = async (id: string) => {
       if (confirm("Remover este motorista?")) {
-          deleteDriver(id);
-          loadDrivers();
+          await deleteDriver(id);
+          await loadDrivers();
       }
+  };
+
+  // --- SHARE VIA WHATSAPP HELPER ---
+  const sendDriverLink = (driver: Driver) => {
+      if (!driver.phone) {
+          alert("Motorista sem telefone cadastrado.");
+          return;
+      }
+      const appUrl = window.location.origin;
+      const msg = `Olá ${driver.name}, acesse o painel RODOVAR para atualizar sua localização:\n\nLink: ${appUrl}\nSua Senha: ${driver.password}`;
+      const url = `https://wa.me/55${driver.phone.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`;
+      window.open(url, '_blank');
   };
 
   const isAdmin = currentUser === 'admin';
@@ -622,6 +631,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
                           />
                       </div>
                       <div>
+                          <label className="block text-xs text-gray-500 uppercase mb-1">Celular / WhatsApp (Apenas Números)</label>
+                          <input 
+                            type="tel"
+                            value={newDriverPhone} 
+                            onChange={e => setNewDriverPhone(e.target.value)} 
+                            className="w-full bg-black/50 border border-gray-600 rounded p-3 text-white focus:border-rodovar-yellow outline-none" 
+                            placeholder="Ex: 71999998888" 
+                          />
+                      </div>
+                      <div>
                           <label className="block text-xs text-gray-500 uppercase mb-1">Senha de Acesso</label>
                           <input 
                             type="text" 
@@ -649,12 +668,22 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
                                   </div>
                                   <div>
                                       <p className="text-white font-bold">{d.name}</p>
-                                      <p className="text-xs text-gray-500">Acesso: <span className="font-mono text-rodovar-yellow">{d.password}</span></p>
+                                      <div className="flex gap-2 text-xs text-gray-500">
+                                          <span>Acesso: <span className="font-mono text-rodovar-yellow">{d.password}</span></span>
+                                          {d.phone && <span>• Tel: {d.phone}</span>}
+                                      </div>
                                   </div>
                               </div>
-                              <button onClick={() => handleDeleteDriver(d.id)} className="text-red-500 hover:text-red-400 text-xs font-bold px-3 py-1 bg-red-900/10 rounded hover:bg-red-900/20 transition-colors">
-                                  REMOVER
-                              </button>
+                              <div className="flex gap-2">
+                                  {d.phone && (
+                                      <button onClick={() => sendDriverLink(d)} className="text-green-500 hover:text-green-400 bg-green-900/20 px-2 py-1 rounded transition-colors" title="Enviar Link via WhatsApp">
+                                          <WhatsAppIcon className="w-5 h-5" />
+                                      </button>
+                                  )}
+                                  <button onClick={() => handleDeleteDriver(d.id)} className="text-red-500 hover:text-red-400 text-xs font-bold px-3 py-1 bg-red-900/10 rounded hover:bg-red-900/20 transition-colors">
+                                      REMOVER
+                                  </button>
+                              </div>
                           </div>
                       ))}
                   </div>

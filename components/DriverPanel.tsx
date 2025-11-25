@@ -15,6 +15,7 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
   const [authName, setAuthName] = useState('');
   const [authPass, setAuthPass] = useState('');
   const [authError, setAuthError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // --- SHIPMENT STATES ---
   const [code, setCode] = useState('');
@@ -25,7 +26,6 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
   const [showInvoice, setShowInvoice] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   
-  // Distância restante (numérico para lógica)
   const [remainingDistanceKm, setRemainingDistanceKm] = useState<number | null>(null);
 
   // --- FORM STATES (DRIVER INPUTS) ---
@@ -44,14 +44,19 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
     return `${hours}:${minutes} - ${day}/${month}`;
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const driver = validateDriverLogin(authName, authPass);
-    if (driver) {
-        setCurrentDriver(driver);
-        setAuthError('');
-    } else {
-        setAuthError('Motorista não encontrado ou senha incorreta.');
+    setIsLoggingIn(true);
+    try {
+        const driver = await validateDriverLogin(authName, authPass);
+        if (driver) {
+            setCurrentDriver(driver);
+            setAuthError('');
+        } else {
+            setAuthError('Motorista não encontrado ou senha incorreta.');
+        }
+    } finally {
+        setIsLoggingIn(false);
     }
   };
 
@@ -61,30 +66,32 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
       setRemainingDistanceKm(null);
   };
 
-  // Função auxiliar para atualizar a distância na UI
   const updateDistanceCalc = (current: Coordinates, dest?: Coordinates) => {
       if (current && dest && (dest.lat !== 0 || dest.lng !== 0)) {
           const dist = getDistanceFromLatLonInKm(current.lat, current.lng, dest.lat, dest.lng);
-          // Mantém precisão decimal para distâncias curtas
           setRemainingDistanceKm(dist);
       } else {
           setRemainingDistanceKm(null);
       }
   };
 
-  const handleShipmentLogin = (e: React.FormEvent) => {
+  const handleShipmentLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const found = getShipment(code.toUpperCase());
-    if (found) {
-        setShipment(found);
-        setDriverNotes(found.driverNotes || '');
-        setError('');
-        setPendingExpenses([]); 
-        
-        // Calcular distância inicial se já houver dados
-        updateDistanceCalc(found.currentLocation.coordinates, found.destinationCoordinates);
-    } else {
-        setError('Carga não encontrada. Verifique o código.');
+    setIsLocating(true); // Reusing loader
+    try {
+        const found = await getShipment(code.toUpperCase());
+        if (found) {
+            setShipment(found);
+            setDriverNotes(found.driverNotes || '');
+            setError('');
+            setPendingExpenses([]); 
+            
+            updateDistanceCalc(found.currentLocation.coordinates, found.destinationCoordinates);
+        } else {
+            setError('Carga não encontrada. Verifique o código.');
+        }
+    } finally {
+        setIsLocating(false);
     }
   };
 
@@ -129,7 +136,7 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                       const { latitude, longitude } = position.coords;
                       const currentCoords: Coordinates = { lat: latitude, lng: longitude };
 
-                      const freshShipment = getShipment(code.toUpperCase());
+                      const freshShipment = await getShipment(code.toUpperCase());
                       if (!freshShipment) {
                           throw new Error("Carga não encontrada.");
                       }
@@ -158,12 +165,10 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                       }
 
                       let destCoords = freshShipment.destinationCoordinates;
-                      // Tenta pegar coords melhores se não tiver, usando endereço completo
                       if ((!destCoords || (destCoords.lat === 0 && destCoords.lng === 0)) && freshShipment.destination) {
                            destCoords = await getCoordinatesForString(freshShipment.destination, freshShipment.destinationAddress);
                       }
 
-                      // ATUALIZAÇÃO DA DISTÂNCIA NA UI
                       updateDistanceCalc(currentCoords, destCoords);
 
                       let progress = freshShipment.progress || 0;
@@ -187,7 +192,7 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                           },
                           destinationCoordinates: destCoords,
                           lastUpdate: getNowFormatted(),
-                          lastUpdatedBy: currentDriver.name, // NOME DO MOTORISTA
+                          lastUpdatedBy: currentDriver.name,
                           progress: progress,
                           message: forceCompletion ? 'Entrega Realizada' : `Atualizado por ${currentDriver.name}`,
                           
@@ -197,7 +202,7 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                           maintenanceCost: 0, fuelCost: 0
                       };
 
-                      saveShipment(updatedShipment);
+                      await saveShipment(updatedShipment);
                       setShipment(updatedShipment);
                       setPendingExpenses([]); 
                       setLastUpdateLog(forceCompletion ? `CONCLUÍDA por ${currentDriver.name}` : `Atualizado em ${city}`);
@@ -217,18 +222,15 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
       });
   };
 
-  // Lógica de Ativação do Botão Concluir
-  // Ativa se a distância for MENOR OU IGUAL A 1 KM (com margem de erro pequena para GPS drift)
   const isCloseEnoughToFinish = remainingDistanceKm !== null && remainingDistanceKm <= 1.0;
   const isTripCompleted = shipment?.status === TrackingStatus.DELIVERED;
 
   const handleUpdateTrip = async () => {
-      // Se estiver próximo o suficiente (1km), pergunta se quer concluir.
       if (isCloseEnoughToFinish && !isTripCompleted) {
           if (confirm("Você está no destino (menos de 1km). Deseja CONCLUIR A VIAGEM e marcar como ENTREGUE?")) {
               setIsLocating(true);
               try {
-                  await performUpdate(true); // Force Completion
+                  await performUpdate(true); 
                   alert("Viagem Concluída com Sucesso!");
               } catch (err: any) {
                   alert(`Erro: ${err.message}`);
@@ -239,7 +241,6 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
           }
       }
 
-      // Atualização Padrão
       setIsLocating(true);
       try {
           await performUpdate(false);
@@ -295,7 +296,9 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
 
                     <div className="flex gap-2">
                         <button type="button" onClick={onClose} className="flex-1 bg-gray-800 text-white font-bold py-3 rounded hover:bg-gray-700">VOLTAR</button>
-                        <button type="submit" className="flex-[2] bg-rodovar-yellow text-black font-bold py-3 rounded hover:bg-yellow-400">ENTRAR</button>
+                        <button type="submit" disabled={isLoggingIn} className="flex-[2] bg-rodovar-yellow text-black font-bold py-3 rounded hover:bg-yellow-400 disabled:opacity-50">
+                            {isLoggingIn ? 'ENTRANDO...' : 'ENTRAR'}
+                        </button>
                     </div>
                 </form>
             </div>
@@ -331,8 +334,8 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                         className="w-full bg-black/50 border border-gray-600 rounded-lg p-4 text-center text-xl text-white font-mono font-bold focus:border-rodovar-yellow outline-none uppercase tracking-widest"
                     />
                     {error && <p className="text-red-500 text-xs font-bold">{error}</p>}
-                    <button type="submit" className="w-full bg-rodovar-yellow text-black font-bold py-3 rounded-lg hover:bg-yellow-400 shadow-[0_0_15px_rgba(255,215,0,0.2)]">
-                        ACESSAR PAINEL
+                    <button type="submit" disabled={isLocating} className="w-full bg-rodovar-yellow text-black font-bold py-3 rounded-lg hover:bg-yellow-400 shadow-[0_0_15px_rgba(255,215,0,0.2)] disabled:opacity-50">
+                        {isLocating ? 'BUSCANDO...' : 'ACESSAR PAINEL'}
                     </button>
                 </form>
             </div>
@@ -425,7 +428,6 @@ const DriverPanel: React.FC<DriverPanelProps> = ({ onClose }) => {
                          <p className="text-[10px] text-gray-500 uppercase mb-1">Última Localização</p>
                          <p className="text-white font-bold text-sm md:text-base">{shipment.currentLocation.city} - {shipment.currentLocation.state}</p>
                     </div>
-                    {/* NEW DISTANCE BOX */}
                     <div className="border-l border-gray-800 pl-4">
                          <p className="text-[10px] text-gray-500 uppercase mb-1">Distância até o Destino</p>
                          <p className="text-rodovar-yellow font-bold text-lg md:text-xl">

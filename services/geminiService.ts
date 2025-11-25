@@ -1,16 +1,26 @@
 import { TrackingData } from "../types";
-import { getShipment, getCoordinatesForString } from "./storageService";
+import { getShipment, getCoordinatesForString, getShipmentByDriverPhone } from "./storageService";
 
-// Este serviço agora atua apenas como uma camada de abstração para o StorageService
-// Garantindo que a regra de negócio "Só localizar se houver cadastro" seja respeitada.
-
-export const fetchTrackingInfo = async (code: string): Promise<TrackingData> => {
+export const fetchTrackingInfo = async (input: string): Promise<TrackingData> => {
   
   // Simula um pequeno delay de rede para feedback visual (loading spinner)
   await new Promise(resolve => setTimeout(resolve, 600));
 
-  // 1. Buscar no banco de dados local (Área Administrativa)
-  const localData = getShipment(code);
+  // Limpa o input
+  const cleanInput = input.trim();
+  const cleanInputUpper = cleanInput.toUpperCase();
+  const digitsOnly = cleanInput.replace(/\D/g, '');
+
+  let localData: TrackingData | null = null;
+
+  // Lógica de Detecção:
+  // Se tiver mais de 8 dígitos e só números, assume que é um telefone
+  if (digitsOnly.length >= 8 && /^\d+$/.test(cleanInput)) {
+      localData = await getShipmentByDriverPhone(digitsOnly);
+  } else {
+      // Caso contrário, busca por Código (RODO-XXX)
+      localData = await getShipment(cleanInputUpper);
+  }
   
   if (localData) {
     // Correção Retroativa: Se a carga já existe mas não tem coords de destino salvas, busca agora.
@@ -27,5 +37,5 @@ export const fetchTrackingInfo = async (code: string): Promise<TrackingData> => 
   }
 
   // 2. Se não existir, lançar erro específico
-  throw new Error("CÓDIGO NÃO ENCONTRADO: Verifique se a numeração está correta ou se a carga já foi cadastrada no sistema.");
+  throw new Error("RASTREAMENTO NÃO ENCONTRADO: Verifique se o código ou o celular do motorista está correto e se há uma viagem ativa.");
 };
