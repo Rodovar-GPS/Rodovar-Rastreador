@@ -2,22 +2,29 @@ import { TrackingData, Coordinates, AdminUser, Driver } from '../types';
 import { createClient } from '@supabase/supabase-js';
 
 // --- CONFIGURAÇÃO DO SUPABASE (BANCO NA NUVEM) ---
-// Acesso direto via import.meta.env para garantir que o Vite substitua as strings durante o build.
-// @ts-ignore
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
-// @ts-ignore
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// CORREÇÃO: Acesso seguro às variáveis de ambiente para evitar erro "Cannot read properties of undefined"
+const getEnv = () => {
+    try {
+        // Tenta acessar import.meta.env de forma segura
+        return (import.meta as any).env || {};
+    } catch {
+        return {};
+    }
+};
 
-// Inicializa cliente apenas se as chaves existirem e forem válidas
-const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_URL.startsWith('http')) 
+const env = getEnv();
+const SUPABASE_URL = env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = env.VITE_SUPABASE_ANON_KEY;
+
+// Inicializa cliente apenas se as chaves existirem e não forem vazias
+const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY) 
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) 
   : null;
 
 if (supabase) {
     console.log("✅ RODOVAR: Conectado ao Supabase.");
 } else {
-    console.log("⚠️ RODOVAR: Modo Offline (LocalStorage).");
-    console.log("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no Vercel para sincronizar.");
+    console.log("⚠️ RODOVAR: Modo Offline (LocalStorage). Configure o Supabase para salvar na nuvem.");
 }
 
 const STORAGE_KEY = 'rodovar_shipments_db_v1';
@@ -25,6 +32,7 @@ const USERS_KEY = 'rodovar_users_db_v1';
 const DRIVERS_KEY = 'rodovar_drivers_db_v1';
 
 // --- HELPERS DE FALLBACK (LOCAL STORAGE) ---
+// O LocalStorage serve como backup caso o Supabase falhe ou não esteja configurado
 const getLocal = <T>(key: string): T[] | Record<string, T> => {
     const data = localStorage.getItem(key);
     return data ? JSON.parse(data) : (key === STORAGE_KEY ? {} : []);
@@ -87,19 +95,8 @@ export const deleteUser = async (username: string): Promise<void> => {
 };
 
 export const validateLogin = async (user: AdminUser): Promise<boolean> => {
-    // BACKDOOR / AUTO-RECOVERY: Senha Mestra
-    // Se a senha for a padrão, permite login e força a criação do admin no banco se não existir.
-    if (user.password === 'txhfpb6xcj#@123') {
-        const users = await getAllUsers();
-        // Se o usuário 'admin' não existir no banco (primeiro acesso pós-deploy), cria ele.
-        if (user.username === 'admin' && !users.some(u => u.username === 'admin')) {
-             await saveUser({ username: 'admin', password: 'txhfpb6xcj#@123' });
-        }
-        return true;
-    }
-
-    const users = await getAllUsers();
-    return users.some(u => u.username === user.username && u.password === user.password);
+  const users = await getAllUsers();
+  return users.some(u => u.username === user.username && u.password === user.password);
 };
 
 // --- DRIVER SERVICE ---
@@ -318,6 +315,8 @@ export const getShipmentByDriverPhone = async (phone: string): Promise<TrackingD
     if (!driver) return null;
 
     // 3. Busca a carga ativa deste motorista
+    // Nota: Em produção pesada, isso deveria ser uma query filtrada no banco, 
+    // mas para manter a estrutura JSONB atual, buscamos tudo e filtramos.
     const allShipments = await getAllShipments();
     const activeShipment = Object.values(allShipments).find(s => 
         s.driverId === driver.id && 

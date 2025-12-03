@@ -1,19 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { Coordinates } from '../types';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 
-// Fix for default markers in Leaflet with bundlers (Vite/Webpack)
-import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
-import markerIcon from 'leaflet/dist/images/marker-icon.png';
-import markerShadow from 'leaflet/dist/images/marker-shadow.png';
-
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-});
+// Declare L globally as it is loaded via script tag
+declare const L: any;
 
 interface MapVisualizationProps {
   coordinates?: Coordinates; // Cargo coordinates
@@ -25,40 +14,39 @@ interface MapVisualizationProps {
 
 const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordinates, destinationCoordinates, userLocation, className, loading }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const markersRef = useRef<L.Layer[]>([]);
-  const polylinesRef = useRef<L.Polyline[]>([]);
+  const mapInstanceRef = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const polylinesRef = useRef<any[]>([]);
 
   // Initialize Map
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
     
-    try {
-        // Create Map with optimization options
-        const map = L.map(mapContainerRef.current, {
-            center: [-14.2350, -51.9253], // Center of Brazil
-            zoom: 4,
-            zoomControl: false,
-            attributionControl: true,
-            preferCanvas: true // Performance boost for markers/lines
-        });
+    // Check if container has dimensions before init to prevent "grey box"
+    if (mapContainerRef.current.clientHeight === 0) return;
 
-        // Standard OpenStreetMap (Colorful & Detailed)
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-            maxZoom: 19,
-            className: 'map-tiles'
-        }).addTo(map);
+    // Create Map with optimization options
+    const map = L.map(mapContainerRef.current, {
+        center: [-14.2350, -51.9253], // Center of Brazil
+        zoom: 4,
+        zoomControl: false,
+        attributionControl: true,
+        preferCanvas: true // Performance boost for markers/lines
+    });
 
-        mapInstanceRef.current = map;
+    // Standard OpenStreetMap (Colorful & Detailed)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19,
+        className: 'map-tiles'
+    }).addTo(map);
 
-        // Invalidate size after small delay to ensure correct render
-        setTimeout(() => {
-            map.invalidateSize();
-        }, 300);
-    } catch (e) {
-        console.error("Erro ao inicializar mapa:", e);
-    }
+    mapInstanceRef.current = map;
+
+    // Invalidate size after small delay to ensure correct render
+    setTimeout(() => {
+        map.invalidateSize();
+    }, 300);
 
     return () => {
         if (mapInstanceRef.current) {
@@ -97,7 +85,6 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
     polylinesRef.current = [];
 
     const bounds = L.latLngBounds([]);
-    let hasPoints = false;
 
     // 1. Add User Marker (Blue)
     if (userLocation) {
@@ -116,7 +103,6 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
         
         markersRef.current.push(userMarker);
         bounds.extend([userLocation.lat, userLocation.lng]);
-        hasPoints = true;
     }
 
     // 2. Add Destination Marker (Red)
@@ -136,7 +122,6 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
 
         markersRef.current.push(destMarker);
         bounds.extend([destinationCoordinates.lat, destinationCoordinates.lng]);
-        hasPoints = true;
     }
 
     // 3. Add Cargo Marker (Yellow Truck Style)
@@ -159,7 +144,6 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
 
         markersRef.current.push(cargoMarker);
         bounds.extend([coordinates.lat, coordinates.lng]);
-        hasPoints = true;
     }
 
     // 4. Draw Lines
@@ -169,7 +153,7 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
         const latlngs = [
             [userLocation.lat, userLocation.lng],
             [coordinates.lat, coordinates.lng]
-        ] as L.LatLngExpression[];
+        ];
 
         const line = L.polyline(latlngs, {
             color: '#2563EB', // Blue 600
@@ -186,7 +170,7 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
          const latlngs = [
             [coordinates.lat, coordinates.lng],
             [destinationCoordinates.lat, destinationCoordinates.lng]
-        ] as L.LatLngExpression[];
+        ];
 
         const line = L.polyline(latlngs, {
             color: '#000000',
@@ -199,8 +183,10 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
     }
 
     // Fit bounds if we have points
-    if (hasPoints && bounds.isValid()) {
+    if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+    } else {
+        map.setView([-14.2350, -51.9253], 4);
     }
 
   }, [coordinates, userLocation, destinationCoordinates]);
@@ -219,9 +205,7 @@ const MapVisualization: React.FC<MapVisualizationProps> = React.memo(({ coordina
 
       {loading && (
         <div className="absolute inset-0 z-[500] bg-black/50 flex items-center justify-center backdrop-blur-sm">
-            <span className="text-white bg-black px-4 py-2 rounded-full font-bold text-xs animate-pulse">
-                ATUALIZANDO DADOS...
-            </span>
+            <span className="text-white bg-black px-4 py-2 rounded-full font-bold text-xs animate-pulse">CARREGANDO MAPA...</span>
         </div>
       )}
     </div>
