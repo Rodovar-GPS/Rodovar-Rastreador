@@ -2,24 +2,41 @@ import { TrackingData, Coordinates, AdminUser, Driver } from '../types';
 import { createClient } from '@supabase/supabase-js';
 
 // --- CONFIGURAÇÃO DO SUPABASE (BANCO NA NUVEM) ---
-const SUPABASE_URL = ''; // Ex: https://xyz.supabase.co
-const SUPABASE_ANON_KEY = ''; // Ex: eyJhbGciOiJIUzI1NiIsInR5...
+// CORREÇÃO: Acesso seguro às variáveis de ambiente para evitar erro "Cannot read properties of undefined"
+const getEnv = () => {
+    try {
+        // Tenta acessar import.meta.env de forma segura
+        return (import.meta as any).env || {};
+    } catch {
+        return {};
+    }
+};
 
-// Inicializa cliente apenas se as chaves existirem
+const env = getEnv();
+const SUPABASE_URL = env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = env.VITE_SUPABASE_ANON_KEY;
+
+// Inicializa cliente apenas se as chaves existirem e não forem vazias
 const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY) 
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) 
   : null;
+
+if (supabase) {
+    console.log("✅ RODOVAR: Conectado ao Supabase.");
+} else {
+    console.log("⚠️ RODOVAR: Modo Offline (LocalStorage). Configure o Supabase para salvar na nuvem.");
+}
 
 const STORAGE_KEY = 'rodovar_shipments_db_v1';
 const USERS_KEY = 'rodovar_users_db_v1';
 const DRIVERS_KEY = 'rodovar_drivers_db_v1';
 
 // --- HELPERS DE FALLBACK (LOCAL STORAGE) ---
+// O LocalStorage serve como backup caso o Supabase falhe ou não esteja configurado
 const getLocal = <T>(key: string): T[] | Record<string, T> => {
     const data = localStorage.getItem(key);
     return data ? JSON.parse(data) : (key === STORAGE_KEY ? {} : []);
 };
-const saveLocal = (key: string, data: any) => localStorage.setItem(key, JSON.stringify(data));
 
 // --- AUTH SERVICE (ADMIN) ---
 
@@ -32,7 +49,7 @@ const initUsers = () => {
 };
 
 export const getAllUsers = async (): Promise<AdminUser[]> => {
-  // Tenta Cloud
+  // Tenta Cloud (Supabase)
   if (supabase) {
       try {
           const { data, error } = await supabase.from('users').select('*');
@@ -52,7 +69,7 @@ export const saveUser = async (user: AdminUser): Promise<boolean> => {
     return false;
   }
 
-  // Cloud
+  // Cloud (Supabase)
   if (supabase) {
       await supabase.from('users').upsert({ username: user.username, data: user });
   }
@@ -67,7 +84,7 @@ export const deleteUser = async (username: string): Promise<void> => {
   let users = await getAllUsers();
   if (users.length <= 1) return; 
   
-  // Cloud
+  // Cloud (Supabase)
   if (supabase) {
       await supabase.from('users').delete().eq('username', username);
   }
@@ -85,7 +102,7 @@ export const validateLogin = async (user: AdminUser): Promise<boolean> => {
 // --- DRIVER SERVICE ---
 
 export const getAllDrivers = async (): Promise<Driver[]> => {
-  // Cloud
+  // Cloud (Supabase)
   if (supabase) {
       try {
         const { data, error } = await supabase.from('drivers').select('*');
@@ -105,7 +122,7 @@ export const saveDriver = async (driver: Driver): Promise<boolean> => {
      return false;
   }
 
-  // Cloud
+  // Cloud (Supabase)
   if (supabase) {
       await supabase.from('drivers').upsert({ id: driver.id, data: driver });
   }
@@ -122,7 +139,7 @@ export const saveDriver = async (driver: Driver): Promise<boolean> => {
 };
 
 export const deleteDriver = async (id: string): Promise<void> => {
-  // Cloud
+  // Cloud (Supabase)
   if (supabase) {
       await supabase.from('drivers').delete().eq('id', id);
   }
@@ -219,7 +236,7 @@ export const calculateProgress = (origin: Coordinates, destination: Coordinates,
 // --- CRUD SHIPMENTS (AGORA ASSÍNCRONO) ---
 
 export const getAllShipments = async (): Promise<Record<string, TrackingData>> => {
-  // Cloud
+  // Cloud (Supabase)
   if (supabase) {
       try {
         const { data, error } = await supabase.from('shipments').select('*');
@@ -233,18 +250,18 @@ export const getAllShipments = async (): Promise<Record<string, TrackingData>> =
       } catch (e) { console.error("Erro Cloud Shipments:", e); }
   }
 
-  // Local
+  // Local (Fallback)
   const stored = localStorage.getItem(STORAGE_KEY);
   return stored ? JSON.parse(stored) : {};
 };
 
 export const saveShipment = async (data: TrackingData): Promise<void> => {
-  // Cloud
+  // Cloud (Supabase)
   if (supabase) {
       await supabase.from('shipments').upsert({ code: data.code, data: data });
   }
 
-  // Local
+  // Local (Sempre mantém backup local)
   const localRaw = localStorage.getItem(STORAGE_KEY);
   const localData = localRaw ? JSON.parse(localRaw) : {};
   
@@ -261,12 +278,14 @@ export const getShipment = async (code: string): Promise<TrackingData | null> =>
       } catch (e) {}
   }
 
+  // Local
   const all = await getAllShipments();
   return all[code] || null;
 };
 
 // --- GERADOR DE CÓDIGOS ÚNICOS ---
 export const generateUniqueCode = async (): Promise<string> => {
+    // Busca códigos existentes (Cloud + Local mix handled by getAllShipments)
     const all = await getAllShipments();
     const existingCodes = new Set(Object.keys(all));
     let newCode = '';
@@ -282,21 +301,22 @@ export const generateUniqueCode = async (): Promise<string> => {
 
 // --- NOVO: BUSCAR CARGA POR TELEFONE DO MOTORISTA ---
 export const getShipmentByDriverPhone = async (phone: string): Promise<TrackingData | null> => {
-    // 1. Limpa o telefone de busca (remove espaços, traços, etc)
+    // 1. Limpa o telefone de busca
     const cleanSearch = phone.replace(/\D/g, '');
     
-    // 2. Busca o motorista com esse telefone (verificando substrings para flexibilidade)
+    // 2. Busca o motorista
     const drivers = await getAllDrivers();
     const driver = drivers.find(d => {
         if (!d.phone) return false;
         const driverPhoneClean = d.phone.replace(/\D/g, '');
-        // Verifica se contém o número (ex: digitou sem DDD mas tem no cadastro, ou vice-versa)
         return driverPhoneClean.includes(cleanSearch) || cleanSearch.includes(driverPhoneClean);
     });
     
     if (!driver) return null;
 
     // 3. Busca a carga ativa deste motorista
+    // Nota: Em produção pesada, isso deveria ser uma query filtrada no banco, 
+    // mas para manter a estrutura JSONB atual, buscamos tudo e filtramos.
     const allShipments = await getAllShipments();
     const activeShipment = Object.values(allShipments).find(s => 
         s.driverId === driver.id && 
@@ -307,7 +327,7 @@ export const getShipmentByDriverPhone = async (phone: string): Promise<TrackingD
 };
 
 export const deleteShipment = async (code: string): Promise<void> => {
-  // Cloud
+  // Cloud (Supabase)
   if (supabase) {
       await supabase.from('shipments').delete().eq('code', code);
   }
