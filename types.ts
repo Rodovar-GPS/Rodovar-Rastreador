@@ -41,13 +41,15 @@ export interface Expense {
 export interface Driver {
   id: string;
   name: string; // Nome e Sobrenome
-  password: string; // Senha de acesso
+  // Password removido do uso prático, mantido opcional por compatibilidade
+  password?: string; 
   phone?: string;
 }
 
 export interface TrackingData {
   code: string;
   status: TrackingStatus;
+  isLive?: boolean; // Indica se o rastreamento em tempo real está ativo
   currentLocation: {
     city: string;
     state: string;

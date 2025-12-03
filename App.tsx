@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { fetchTrackingInfo } from './services/geminiService';
 import { TrackingData, TrackingStatus, Coordinates, UserAddress, StatusLabels } from './types';
 import { TruckIcon, SearchIcon, MapPinIcon, WhatsAppIcon, SteeringWheelIcon } from './components/Icons';
@@ -21,6 +21,9 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [remainingDistance, setRemainingDistance] = useState<number | null>(null);
   
+  // Live Tracking Polling Ref
+  const pollingIntervalRef = useRef<number | null>(null);
+
   // Location States
   const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
   const [userAddress, setUserAddress] = useState<UserAddress | null>(null);
@@ -70,6 +73,49 @@ const App: React.FC = () => {
         setLocationLoading(false);
     }
   }, []);
+
+  // Polling Effect for Live Tracking
+  useEffect(() => {
+      // Clear interval if no data or not live
+      if (!trackingData || !trackingData.isLive || trackingData.status === TrackingStatus.DELIVERED) {
+          if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+          }
+          return;
+      }
+
+      // Start polling if live
+      if (!pollingIntervalRef.current) {
+          pollingIntervalRef.current = window.setInterval(async () => {
+               try {
+                   // Silent refetch
+                   const updated = await fetchTrackingInfo(trackingData.code);
+                   setTrackingData(updated);
+                   
+                   // Update dist calc
+                   if (updated.currentLocation.coordinates && updated.destinationCoordinates && 
+                    (updated.destinationCoordinates.lat !== 0 || updated.destinationCoordinates.lng !== 0)) {
+                        const dist = getDistanceFromLatLonInKm(
+                            updated.currentLocation.coordinates.lat,
+                            updated.currentLocation.coordinates.lng,
+                            updated.destinationCoordinates.lat,
+                            updated.destinationCoordinates.lng
+                        );
+                        setRemainingDistance(Math.round(dist));
+                   }
+
+               } catch (e) {
+                   console.error("Erro no polling de rastreamento:", e);
+               }
+          }, 5000); // 5 seconds polling for smooth-ish updates
+      }
+
+      return () => {
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+      };
+  }, [trackingData?.isLive, trackingData?.code, trackingData?.status]);
+
 
   const handleTrack = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -295,8 +341,8 @@ const App: React.FC = () => {
                         type="text" 
                         value={trackingCode}
                         onChange={(e) => setTrackingCode(e.target.value.toUpperCase())}
-                        placeholder="CÓDIGO (Ex: RODO-001) ou CELULAR DO MOTORISTA"
-                        className="w-full bg-[#1E1E1E] border-2 border-gray-700 text-white px-4 py-3 md:px-6 md:py-4 rounded-full focus:outline-none focus:border-rodovar-yellow focus:ring-1 focus:ring-rodovar-yellow transition-all text-base md:text-lg tracking-wider shadow-2xl placeholder-gray-600"
+                        placeholder="CÓDIGO (Ex: RODO-58291) ou CELULAR"
+                        className="w-full bg-[#1E1E1E] border-2 border-gray-700 text-white px-4 py-3 md:px-6 md:py-4 rounded-full focus:outline-none focus:border-rodovar-yellow focus:ring-1 focus:ring-rodovar-yellow transition-all text-base md:text-lg tracking-wider shadow-2xl placeholder-gray-600 uppercase"
                     />
                     <button 
                         type="submit"
@@ -342,7 +388,12 @@ const App: React.FC = () => {
                                     <div className="absolute -left-[23px] md:-left-[31px] top-0 bg-rodovar-yellow rounded-full p-1 border-4 border-[#1E1E1E]">
                                         <div className="w-2 h-2 md:w-3 md:h-3 bg-black rounded-full"></div>
                                     </div>
-                                    <h4 className="text-gray-400 text-xs uppercase tracking-wider">Localização Atual</h4>
+                                    <div className="flex items-center gap-2 mb-1">
+                                         <h4 className="text-gray-400 text-xs uppercase tracking-wider">Localização Atual</h4>
+                                         {trackingData.isLive && (
+                                             <span className="text-[9px] bg-red-600 text-white px-2 rounded-full animate-pulse font-bold tracking-wider">AO VIVO</span>
+                                         )}
+                                    </div>
                                     
                                     {trackingData.currentLocation.address && (
                                         <p className="text-xs md:text-sm text-gray-300 mb-1 font-medium border-l-2 border-rodovar-yellow pl-2 mt-1">
@@ -439,6 +490,12 @@ const App: React.FC = () => {
                  />
                  {!trackingData && userLocation && (
                      <p className="text-center text-gray-500 text-xs mt-2">Seu GPS está ativo. Rastreie uma carga para ver a rota.</p>
+                 )}
+                 {trackingData?.isLive && (
+                     <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white text-xs px-4 py-1.5 rounded-full shadow-lg z-[400] font-bold tracking-widest flex items-center gap-2 animate-pulse">
+                         <div className="w-2 h-2 bg-white rounded-full animate-ping"></div>
+                         ACOMPANHAMENTO AO VIVO
+                     </div>
                  )}
             </div>
         </div>

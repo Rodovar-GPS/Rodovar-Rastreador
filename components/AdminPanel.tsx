@@ -4,7 +4,7 @@ import {
     saveShipment, getAllShipments, deleteShipment, 
     getCoordinatesForCity, getCoordinatesForString, calculateProgress,
     saveUser, getAllUsers, deleteUser,
-    getAllDrivers, saveDriver, deleteDriver
+    getAllDrivers, saveDriver, deleteDriver, generateUniqueCode
 } from '../services/storageService';
 import { TruckIcon, MapPinIcon, SearchIcon, SteeringWheelIcon, WhatsAppIcon } from './Icons';
 
@@ -90,7 +90,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
 
   // States for New Driver Form
   const [newDriverName, setNewDriverName] = useState('');
-  const [newDriverPass, setNewDriverPass] = useState('');
   const [newDriverPhone, setNewDriverPhone] = useState('');
   const [driverMsg, setDriverMsg] = useState('');
 
@@ -101,13 +100,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
   }, []);
 
   useEffect(() => {
-    if (!isEditing && Object.keys(shipments).length >= 0) {
-        const nextCode = generateNextCode(shipments);
-        setCode(nextCode);
-        setUpdateTime(getNowFormatted());
-        setEstimatedDateInput(getFutureDateInputFormat(3));
+    // Generate code only when not editing and form is fresh
+    if (!isEditing && activeTab === 'shipments' && !code) {
+        generateNewCode();
     }
-  }, [shipments, isEditing]);
+  }, [shipments, isEditing, activeTab]);
+
+  const generateNewCode = async () => {
+      const nextCode = await generateUniqueCode();
+      setCode(nextCode);
+      setUpdateTime(getNowFormatted());
+      setEstimatedDateInput(getFutureDateInputFormat(3));
+  };
 
   const loadShipments = async () => {
     setLoading(true);
@@ -124,22 +128,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
     setDrivers(await getAllDrivers());
   };
 
-  const generateNextCode = (currentShipments: Record<string, TrackingData>): string => {
-    const keys = Object.keys(currentShipments);
-    let maxId = 0;
-    keys.forEach(k => {
-        const match = k.match(/RODO-?(\d+)/);
-        if (match && match[1]) {
-            const num = parseInt(match[1], 10);
-            if (num > maxId) maxId = num;
-        }
-    });
-    const nextId = maxId + 1;
-    return `RODO-${String(nextId).padStart(3, '0')}`;
-  };
-
   const resetForm = () => {
       setIsEditing(false);
+      generateNewCode(); // Generate new random code
       setStatus(TrackingStatus.IN_TRANSIT);
       setCity('');
       setState('');
@@ -239,6 +230,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
             message,
             notes,
             progress: calculatedProgress,
+            isLive: isEditing ? shipments[code]?.isLive : false, // Maintain live status if editing
             
             driverId: selectedDriverId,
             driverName: assignedDriver ? assignedDriver.name : undefined,
@@ -327,19 +319,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
   // --- HANDLERS FOR DRIVERS ---
   const handleSaveDriver = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!newDriverName || !newDriverPass) return;
+      if (!newDriverName) return;
       
       const newDriver: Driver = {
           id: Date.now().toString(),
           name: newDriverName,
-          password: newDriverPass,
-          phone: newDriverPhone
+          phone: newDriverPhone,
+          password: '' // Não usado mais
       };
 
       const success = await saveDriver(newDriver);
       if (success) {
           setNewDriverName('');
-          setNewDriverPass('');
           setNewDriverPhone('');
           setDriverMsg('Motorista cadastrado!');
           await loadDrivers();
@@ -363,7 +354,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
           return;
       }
       const appUrl = window.location.origin;
-      const msg = `Olá ${driver.name}, acesse o painel RODOVAR para atualizar sua localização:\n\nLink: ${appUrl}\nSua Senha: ${driver.password}`;
+      const msg = `Olá ${driver.name}, acesse o sistema RODOVAR com o código da carga para iniciar o rastreamento.\n\nLink: ${appUrl}`;
       const url = `https://wa.me/55${driver.phone.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`;
       window.open(url, '_blank');
   };
@@ -438,7 +429,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
                         </h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                             <div>
-                                <label className="block text-[10px] text-gray-500 uppercase mb-1">Código</label>
+                                <label className="block text-[10px] text-gray-500 uppercase mb-1">Código (Automático)</label>
                                 <input value={code} readOnly className="w-full bg-[#0a0a0a] border border-gray-700 rounded p-2 text-rodovar-yellow font-mono font-bold text-sm opacity-80" />
                             </div>
                             <div className="col-span-2 md:col-span-1">
@@ -577,9 +568,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
                                         </div>
                                     )}
                                 </div>
-                                <span className={`text-[10px] px-2 py-1 rounded font-bold uppercase border ${s.status === TrackingStatus.DELIVERED ? 'bg-green-900/20 border-green-800 text-green-400' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
-                                    {StatusLabels[s.status]}
-                                </span>
+                                <div className="flex flex-col items-end gap-1">
+                                    <span className={`text-[10px] px-2 py-1 rounded font-bold uppercase border ${s.status === TrackingStatus.DELIVERED ? 'bg-green-900/20 border-green-800 text-green-400' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
+                                        {StatusLabels[s.status]}
+                                    </span>
+                                    {s.isLive && (
+                                        <span className="text-[9px] bg-red-600 text-white px-2 rounded-full animate-pulse font-bold">LIVE</span>
+                                    )}
+                                </div>
                             </div>
                             
                             <div className="grid grid-cols-2 gap-4 text-xs text-gray-400 my-1">
@@ -640,16 +636,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
                             placeholder="Ex: 71999998888" 
                           />
                       </div>
-                      <div>
-                          <label className="block text-xs text-gray-500 uppercase mb-1">Senha de Acesso</label>
-                          <input 
-                            type="text" 
-                            value={newDriverPass} 
-                            onChange={e => setNewDriverPass(e.target.value)} 
-                            className="w-full bg-black/50 border border-gray-600 rounded p-3 text-white focus:border-rodovar-yellow outline-none" 
-                            placeholder="Senha simples" 
-                          />
-                      </div>
+                      <p className="text-xs text-gray-500 italic">Não é necessário criar senha. O motorista acessa apenas com o Código da Carga.</p>
                       {driverMsg && <p className="text-green-500 text-sm font-bold">{driverMsg}</p>}
                       <button type="submit" className="w-full bg-rodovar-yellow text-black font-bold py-3 rounded hover:bg-yellow-400 uppercase tracking-wide">
                           Cadastrar Motorista
@@ -669,8 +656,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, currentUser }) => {
                                   <div>
                                       <p className="text-white font-bold">{d.name}</p>
                                       <div className="flex gap-2 text-xs text-gray-500">
-                                          <span>Acesso: <span className="font-mono text-rodovar-yellow">{d.password}</span></span>
-                                          {d.phone && <span>• Tel: {d.phone}</span>}
+                                          {d.phone && <span>Tel: {d.phone}</span>}
                                       </div>
                                   </div>
                               </div>

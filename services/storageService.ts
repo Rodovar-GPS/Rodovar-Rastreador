@@ -2,11 +2,6 @@ import { TrackingData, Coordinates, AdminUser, Driver } from '../types';
 import { createClient } from '@supabase/supabase-js';
 
 // --- CONFIGURAÇÃO DO SUPABASE (BANCO NA NUVEM) ---
-// Para ativar a sincronização entre dispositivos:
-// 1. Crie um projeto em https://supabase.com
-// 2. Crie as tabelas: 'shipments', 'drivers', 'users' com colunas (id/code text PK, data jsonb)
-// 3. Cole a URL e a KEY abaixo.
-
 const SUPABASE_URL = ''; // Ex: https://xyz.supabase.co
 const SUPABASE_ANON_KEY = ''; // Ex: eyJhbGciOiJIUzI1NiIsInR5...
 
@@ -138,12 +133,6 @@ export const deleteDriver = async (id: string): Promise<void> => {
   localStorage.setItem(DRIVERS_KEY, JSON.stringify(drivers));
 };
 
-export const validateDriverLogin = async (name: string, password: string): Promise<Driver | null> => {
-    const drivers = await getAllDrivers();
-    return drivers.find(d => d.name.toLowerCase() === name.toLowerCase() && d.password === password) || null;
-};
-
-
 // --- GEO & SHIPMENT SERVICE ---
 
 export const getCoordinatesForCity = async (city: string, state: string): Promise<Coordinates> => {
@@ -256,8 +245,6 @@ export const saveShipment = async (data: TrackingData): Promise<void> => {
   }
 
   // Local
-  const all = await getAllShipments(); 
-  // Mas para garantir integridade local, vamos ler o local puro
   const localRaw = localStorage.getItem(STORAGE_KEY);
   const localData = localRaw ? JSON.parse(localRaw) : {};
   
@@ -276,6 +263,21 @@ export const getShipment = async (code: string): Promise<TrackingData | null> =>
 
   const all = await getAllShipments();
   return all[code] || null;
+};
+
+// --- GERADOR DE CÓDIGOS ÚNICOS ---
+export const generateUniqueCode = async (): Promise<string> => {
+    const all = await getAllShipments();
+    const existingCodes = new Set(Object.keys(all));
+    let newCode = '';
+    
+    do {
+        // Gera 5 dígitos aleatórios (10000 a 99999)
+        const randomNum = Math.floor(10000 + Math.random() * 90000);
+        newCode = `RODO-${randomNum}`;
+    } while (existingCodes.has(newCode));
+    
+    return newCode;
 };
 
 // --- NOVO: BUSCAR CARGA POR TELEFONE DO MOTORISTA ---
